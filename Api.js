@@ -330,6 +330,124 @@ function playlistOwnedByUser(playlist, userId) {
   return !!playlist && !!user && String(playlist.ownerId || "") === user
 }
 
+function isSpotifyPlaylist(playlist) {
+  if (!playlist) return false
+  var ownerId = String(playlist.ownerId || "").toLowerCase()
+  var ownerName = String(playlist.ownerName || "").toLowerCase()
+  return ownerId === "spotify" || ownerName === "spotify"
+}
+
+function categorizePlaylists(playlists, userId) {
+  var list = arrayValues(playlists)
+  var owned = []
+  var spotify = []
+  var followed = []
+  var knownUser = String(userId || "") !== ""
+
+  for (var i = 0; i < list.length; i++) {
+    var item = list[i]
+    if (!item) continue
+    if (knownUser && playlistOwnedByUser(item, userId)) {
+      owned.push(item)
+    } else if (isSpotifyPlaylist(item)) {
+      spotify.push(item)
+    } else if (knownUser) {
+      followed.push(item)
+    } else {
+      owned.push(item)
+    }
+  }
+
+  return {
+    owned: owned,
+    spotify: spotify,
+    followed: followed
+  }
+}
+
+function sortSidebarItems(items, sortMode, recentContextMap) {
+  var list = arrayValues(items).slice()
+  var mode = String(sortMode || "alpha").toLowerCase()
+  if (mode === "default") return list
+
+  if (mode === "recent" || mode === "recents") {
+    var recents = recentContextMap && typeof recentContextMap === "object" ? recentContextMap : {}
+    list.sort(function(a, b) {
+      var timeA = Number(recents[a && a.uri]) || 0
+      var timeB = Number(recents[b && b.uri]) || 0
+      if (timeA > timeB) return -1
+      if (timeA < timeB) return 1
+      var nameA = String((a && a.name) || "").toLowerCase()
+      var nameB = String((b && b.name) || "").toLowerCase()
+      if (nameA < nameB) return -1
+      if (nameA > nameB) return 1
+      return 0
+    })
+    return list
+  }
+
+  list.sort(function(a, b) {
+    var nameA = String((a && a.name) || "").toLowerCase()
+    var nameB = String((b && b.name) || "").toLowerCase()
+    if (nameA < nameB) return -1
+    if (nameA > nameB) return 1
+    return 0
+  })
+  return list
+}
+
+function sidebarPlaylistItems(playlists, userId, collapsedSections, sortMode, recentContextMap) {
+  var groups = categorizePlaylists(playlists, userId)
+  var mode = String(sortMode || "alpha").toLowerCase()
+  var sections = [
+    { id: "owned", title: "YOUR PLAYLISTS", items: sortSidebarItems(groups.owned, mode, recentContextMap) },
+    { id: "spotify", title: "MADE FOR YOU", items: sortSidebarItems(groups.spotify, mode, recentContextMap) },
+    { id: "followed", title: "FOLLOWED PLAYLISTS", items: sortSidebarItems(groups.followed, mode, recentContextMap) }
+  ]
+  var collapsed = collapsedSections || {}
+  var result = []
+
+  for (var s = 0; s < sections.length; s++) {
+    var sec = sections[s]
+    if (!sec.items.length) continue
+    var isCollapsed = !!collapsed[sec.id]
+    result.push({
+      isHeader: true,
+      sectionId: sec.id,
+      title: sec.title,
+      count: sec.items.length,
+      collapsed: isCollapsed
+    })
+    if (!isCollapsed) {
+      for (var i = 0; i < sec.items.length; i++) {
+        result.push(sec.items[i])
+      }
+    }
+  }
+
+  return result
+}
+
+function sidebarPodcastItems(shows, collapsedSections, sortMode) {
+  var list = sortSidebarItems(shows, sortMode || "alpha")
+  if (!list.length) return []
+  var collapsed = collapsedSections || {}
+  var isCollapsed = !!collapsed["shows"]
+  var result = [{
+    isHeader: true,
+    sectionId: "shows",
+    title: "SUBSCRIBED SHOWS",
+    count: list.length,
+    collapsed: isCollapsed
+  }]
+  if (!isCollapsed) {
+    for (var i = 0; i < list.length; i++) {
+      result.push(list[i])
+    }
+  }
+  return result
+}
+
 function playlistItemsHiddenByApi(status, owned, collaborative, knownUser) {
   if (owned === true || collaborative === true || knownUser !== true) return false
   var code = Number(status) || 0
@@ -399,7 +517,7 @@ function normalizedShortcutPlayer(value) {
 }
 
 function normalizedShortcutHints(value) {
-  return String(value || "On") === "Off" ? "Off" : "On"
+  return String(value || "Off") === "On" ? "On" : "Off"
 }
 
 function shortcutSequenceList(value) {
@@ -1823,6 +1941,7 @@ function normalizeTrack(value, imageWidth, parentContext) {
     releaseDate: String(item.release_date || album.release_date || ""),
     addedAt: String(source.added_at || ""),
     playedAt: String(source.played_at || ""),
+    contextUri: source.context && source.context.uri ? String(source.context.uri) : "",
     resumeMs: Math.max(0, Number(resume.resume_position_ms) || 0),
     fullyPlayed: resume.fully_played === true,
     explicit: item.explicit === true,

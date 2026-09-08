@@ -38,7 +38,7 @@ BarWidget {
   property bool pendingShortcutLatch: false
   readonly property bool shortcutHintsEnabled: spotify
     ? spotify.shortcutHintsEnabled
-    : String(root.setting("shortcutHints", "On")) !== "Off"
+    : String(root.setting("shortcutHints", "Off")) !== "Off"
   readonly property bool shortcutHintsActive: shortcutHintsEnabled
     && shortcutModeLatched && !miniShortcutHelpVisible
     && !lyricsInstallPromptVisible

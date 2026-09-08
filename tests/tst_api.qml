@@ -298,6 +298,77 @@ TestCase {
       "This playlist has no visible items.")
   }
 
+  function test_categorizePlaylistsAndSidebarItems() {
+    var pOwned = { id: "p1", name: "My Playlist", ownerId: "user-1", ownerName: "Me" }
+    var pSpotify = { id: "p2", name: "Discover Weekly", ownerId: "spotify", ownerName: "Spotify" }
+    var pFollowed = { id: "p3", name: "Friend Playlist", ownerId: "friend-99", ownerName: "Friend" }
+
+    var categorized = Api.categorizePlaylists([pOwned, pSpotify, pFollowed], "user-1")
+    compare(categorized.owned.length, 1)
+    compare(categorized.owned[0].id, "p1")
+    compare(categorized.spotify.length, 1)
+    compare(categorized.spotify[0].id, "p2")
+    compare(categorized.followed.length, 1)
+    compare(categorized.followed[0].id, "p3")
+
+    var items = Api.sidebarPlaylistItems([pOwned, pSpotify, pFollowed], "user-1", {})
+    compare(items.length, 6)
+    compare(items[0].isHeader, true)
+    compare(items[0].sectionId, "owned")
+    compare(items[0].title, "YOUR PLAYLISTS")
+    compare(items[0].count, 1)
+    compare(items[0].collapsed, false)
+    compare(items[1].id, "p1")
+    compare(items[2].isHeader, true)
+    compare(items[2].sectionId, "spotify")
+    compare(items[3].id, "p2")
+    compare(items[4].isHeader, true)
+    compare(items[4].sectionId, "followed")
+    compare(items[5].id, "p3")
+
+    var collapsed = Api.sidebarPlaylistItems([pOwned, pSpotify, pFollowed], "user-1", { spotify: true })
+    compare(collapsed.length, 5)
+    compare(collapsed[2].isHeader, true)
+    compare(collapsed[2].sectionId, "spotify")
+    compare(collapsed[2].collapsed, true)
+    compare(collapsed[3].isHeader, true)
+    compare(collapsed[3].sectionId, "followed")
+
+    var shows = [{ id: "show-1", name: "Tech Show", type: "show" }]
+    var podItems = Api.sidebarPodcastItems(shows, {})
+    compare(podItems.length, 2)
+    compare(podItems[0].isHeader, true)
+    compare(podItems[0].sectionId, "shows")
+    compare(podItems[0].title, "SUBSCRIBED SHOWS")
+    compare(podItems[1].id, "show-1")
+
+    compare(Api.sidebarPodcastItems([], {}).length, 0)
+
+    // Test sorting logic
+    var pZ = { id: "pz", name: "Zeta", uri: "spotify:playlist:pz", ownerId: "user-1" }
+    var pA = { id: "pa", name: "Alpha", uri: "spotify:playlist:pa", ownerId: "user-1" }
+    var pM = { id: "pm", name: "Mike", uri: "spotify:playlist:pm", ownerId: "user-1" }
+
+    // Alphabetical sort (A-Z)
+    var sortedAlpha = Api.sortSidebarItems([pZ, pA, pM], "alpha")
+    compare(sortedAlpha[0].name, "Alpha")
+    compare(sortedAlpha[1].name, "Mike")
+    compare(sortedAlpha[2].name, "Zeta")
+
+    // Default sort (original order)
+    var sortedDefault = Api.sortSidebarItems([pZ, pA, pM], "default")
+    compare(sortedDefault[0].name, "Zeta")
+    compare(sortedDefault[1].name, "Alpha")
+    compare(sortedDefault[2].name, "Mike")
+
+    // Recent sort (by timestamp descending)
+    var recents = { "spotify:playlist:pm": 500, "spotify:playlist:pz": 1000 }
+    var sortedRecent = Api.sortSidebarItems([pZ, pA, pM], "recent", recents)
+    compare(sortedRecent[0].name, "Zeta") // 1000
+    compare(sortedRecent[1].name, "Mike") // 500
+    compare(sortedRecent[2].name, "Alpha") // 0
+  }
+
   function test_responsiveMediaRowsAndSearchColumnsUseMeasuredWidth() {
     verify(Api.mediaRowShouldCompact(220, 180, 4))
     verify(!Api.mediaRowShouldCompact(180, 220, 4))
@@ -1421,10 +1492,10 @@ TestCase {
   }
 
   function test_shortcutHints_matchRequiredModifiersAndKeycaps() {
-    compare(Api.normalizedShortcutHints(undefined), "On")
+    compare(Api.normalizedShortcutHints(undefined), "Off")
     compare(Api.normalizedShortcutHints("On"), "On")
     compare(Api.normalizedShortcutHints("Off"), "Off")
-    compare(Api.normalizedShortcutHints("off"), "On")
+    compare(Api.normalizedShortcutHints("off"), "Off")
 
     var none = { ctrl: false, shift: false, alt: false }
     var ctrl = { ctrl: true, shift: false, alt: false }

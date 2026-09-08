@@ -39,7 +39,7 @@ Item {
     idleShutdownMinutes: 15,
     showMiniPlayer: "On",
     shortcutPlayer: "Omarchy Music app",
-    shortcutHints: "On",
+    shortcutHints: "Off",
     showTrackTitle: "On",
     showArtistName: "Off",
     showPausedTrack: "On",
@@ -57,7 +57,7 @@ Item {
   readonly property bool showMiniPlayer: String(settings.showMiniPlayer || "On") !== "Off"
   readonly property string shortcutPlayer: Api.normalizedShortcutPlayer(
     settings.shortcutPlayer)
-  readonly property bool shortcutHintsEnabled: String(settings.shortcutHints || "On") !== "Off"
+  readonly property bool shortcutHintsEnabled: String(settings.shortcutHints || "Off") !== "Off"
   readonly property bool showTrackTitle: String(settings.showTrackTitle || "On") !== "Off"
   readonly property bool showArtistName: String(settings.showArtistName || "Off") === "On"
   readonly property bool showPausedTrack: String(settings.showPausedTrack || "On") !== "Off"

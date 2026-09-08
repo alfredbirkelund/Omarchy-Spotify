@@ -23,6 +23,10 @@ Item {
   property string searchText: ""
   property string searchType: "track"
   property string libraryType: "tracks"
+  property string sidebarLibraryTab: "playlists"
+  property var collapsedSections: ({})
+  property string sidebarSort: "alpha"
+  property var recentPlaylistHistory: ({})
   property string homeType: "recent"
   property string libraryFilter: ""
   property string librarySort: "default"
@@ -50,7 +54,7 @@ Item {
   property string draftIdleMinutes: "15"
   property bool draftShowMiniPlayer: true
   property string draftShortcutPlayer: "Omarchy Music app"
-  property bool draftShortcutHints: true
+  property bool draftShortcutHints: false
   property bool shortcutModeLatched: false
   property int heldModifierFlags: 0
   property bool panelCursorActive: false
@@ -112,7 +116,7 @@ Item {
     || playlistPicker.opened || createPlaylistPopup.opened || sleepPopup.opened
     || shortcutHelpPopup.opened || lyricsInstallPopup.opened
   readonly property bool shortcutHintsEnabled: service
-    ? service.shortcutHintsEnabled : true
+    ? service.shortcutHintsEnabled : false
   readonly property bool typingInField: {
     var item = window.activeFocusItem
     return !!item && ("acceptableInput" in item || "echoMode" in item)
@@ -446,6 +450,13 @@ Item {
       ? String(state.searchType) : "track"
     libraryType = ["tracks", "albums", "artists", "shows", "episodes", "audiobooks"]
       .indexOf(String(state.libraryType || "")) >= 0 ? String(state.libraryType) : "tracks"
+    sidebarLibraryTab = state.sidebarLibraryTab === "podcasts" ? "podcasts" : "playlists"
+    collapsedSections = state.collapsedSections && typeof state.collapsedSections === "object"
+      ? state.collapsedSections : ({})
+    sidebarSort = ["alpha", "recent", "default"].indexOf(String(state.sidebarSort || "")) >= 0
+      ? String(state.sidebarSort) : "alpha"
+    recentPlaylistHistory = state.recentPlaylistHistory && typeof state.recentPlaylistHistory === "object"
+      ? state.recentPlaylistHistory : ({})
     homeType = ["recent", "tracks", "artists"].indexOf(String(state.homeType || "")) >= 0
       ? String(state.homeType) : "recent"
     libraryFilter = String(state.libraryFilter || "")
@@ -493,6 +504,10 @@ Item {
       searchText: searchText,
       searchType: searchType,
       libraryType: libraryType,
+      sidebarLibraryTab: sidebarLibraryTab,
+      collapsedSections: collapsedSections,
+      sidebarSort: sidebarSort,
+      recentPlaylistHistory: recentPlaylistHistory,
       homeType: homeType,
       libraryFilter: libraryFilter,
       librarySort: librarySort,
@@ -608,6 +623,8 @@ Item {
   function activateMedia(item, sourceItems, contextUri, successMessage) {
     if (!item || !service) return
     if (unifiedSearchField.activeFocus) focusScope.forceActiveFocus()
+    if (contextUri) recordRecentPlaylist(contextUri)
+    else if (item && item.uri && /^spotify:(playlist|show|album):/.test(item.uri)) recordRecentPlaylist(item.uri)
     service.playItem(item, sourceItems, contextUri, successMessage)
   }
 
@@ -944,10 +961,11 @@ Item {
     var items = primaryNavigationItems()
     for (var i = 0; i < items.length; i++)
       actions.push("nav-" + items[i].id)
-    actions.push("nav-library", "nav-playlists")
-    if (accountConnected && service && !service.playlistActionBusy)
+    actions.push("nav-library", "nav-playlists", "nav-podcasts")
+    if (accountConnected && service && !service.playlistActionBusy
+        && sidebarLibraryTab === "playlists")
       actions.push("nav-create")
-    if (!compactWidth && service && service.sidebarPlaylists().length)
+    if (!compactWidth && root.sidebarItems().length)
       actions.push("sidebar-playlists")
     actions.push("nav-settings")
     return actions
@@ -1203,15 +1221,51 @@ Item {
     else if (action === "nav-discover") chooseTab("discover")
     else if (action === "nav-radio") openLastRadio()
     else if (action === "nav-queue") chooseTab("queue")
-    else if (action === "nav-library") chooseTab("library")
-    else if (action === "nav-playlists") chooseTab("playlists")
+    else if (action === "nav-library") {
+      if (sidebarLibraryTab === "podcasts") {
+        libraryType = "episodes"
+        chooseTab("library")
+        if (service) service.loadLibrary("episodes", false)
+      } else {
+        libraryType = "tracks"
+        chooseTab("library")
+        if (service) service.loadLibrary("tracks", false)
+      }
+    }
+    else if (action === "nav-playlists") {
+      sidebarLibraryTab = "playlists"
+      if (!compactWidth) {
+        if (service) service.loadSidebarPlaylists()
+      } else {
+        chooseTab("playlists")
+      }
+    }
+    else if (action === "nav-podcasts") {
+      sidebarLibraryTab = "podcasts"
+      if (!compactWidth) {
+        if (service) {
+          service.loadLibrary("shows", false)
+          service.loadLibrary("episodes", false)
+        }
+      } else {
+        libraryType = "shows"
+        chooseTab("library")
+        if (service) service.loadLibrary("shows", false)
+      }
+    }
     else if (action === "nav-create") openCreatePlaylistPopup()
     else if (action === "sidebar-playlists") {
-      var playlists = service ? service.sidebarPlaylists() : []
-      var playlist = playlists[playlistShortcuts.currentIndex]
-      if (playlist) {
-        chooseTab("playlists")
-        service.openPlaylist(playlist)
+      var items = root.sidebarItems()
+      var item = items[playlistShortcuts.currentIndex]
+      if (item) {
+        if (item.isHeader) {
+          root.toggleSectionCollapsed(item.sectionId)
+        } else if (item.type === "show") {
+          openItem(item)
+        } else {
+          chooseTab("playlists")
+          if (service) service.openPlaylist(item)
+        }
       }
     } else if (action === "nav-settings") chooseTab("setup")
     else if (action === "back") goBack()
@@ -2057,9 +2111,71 @@ Item {
     return "Songs, artists, albums, playlists, podcasts and audiobooks"
   }
 
-  function sidebarPlaylistName(item) {
-    var name = item && item.name ? String(item.name) : "Playlist"
+  function toggleSectionCollapsed(sectionId) {
+    var next = Api.shallowCopy(collapsedSections)
+    next[sectionId] = !next[sectionId]
+    collapsedSections = next
+  }
+
+  function recordRecentPlaylist(uri) {
+    var key = String(uri || "")
+    if (!key) return
+    var next = Api.shallowCopy(recentPlaylistHistory)
+    next[key] = Date.now()
+    recentPlaylistHistory = next
+  }
+
+  function recentPlaylistContexts() {
+    var map = Api.shallowCopy(recentPlaylistHistory)
+    if (service && service.recentTracks) {
+      for (var i = 0; i < service.recentTracks.length; i++) {
+        var t = service.recentTracks[i]
+        if (t && t.contextUri && /^spotify:playlist:/.test(t.contextUri)) {
+          var time = t.playedAt ? Date.parse(t.playedAt) : 0
+          if (!map[t.contextUri] || map[t.contextUri] < time) {
+            map[t.contextUri] = time
+          }
+        }
+      }
+    }
+    if (service && service.currentPlayback && service.currentPlayback.context) {
+      var curUri = String(service.currentPlayback.context.uri || "")
+      if (/^spotify:playlist:/.test(curUri)) {
+        map[curUri] = Date.now()
+      }
+    }
+    return map
+  }
+
+  function sidebarSortLabel() {
+    if (sidebarSort === "recent") return "Recents ▾"
+    if (sidebarSort === "default") return "Default ▾"
+    return "A–Z ▾"
+  }
+
+  function cycleSidebarSort() {
+    if (sidebarSort === "alpha") sidebarSort = "recent"
+    else if (sidebarSort === "recent") sidebarSort = "default"
+    else sidebarSort = "alpha"
+    persistUiState()
+  }
+
+  function sidebarItems() {
+    if (!service) return []
+    if (sidebarLibraryTab === "podcasts")
+      return Api.sidebarPodcastItems(service.savedShows, collapsedSections, sidebarSort)
+    return Api.sidebarPlaylistItems(service.sidebarPlaylists(), service.currentUserId, collapsedSections, sidebarSort, recentPlaylistContexts())
+  }
+
+  function sidebarItemName(item) {
+    if (!item) return ""
+    var fallback = item.type === "show" ? "Podcast" : "Playlist"
+    var name = item.name ? String(item.name) : fallback
     return name.length > 22 ? name.substring(0, 21) + "…" : name
+  }
+
+  function sidebarPlaylistName(item) {
+    return sidebarItemName(item)
   }
 
   function playlistOptions() {
@@ -3421,29 +3537,48 @@ Item {
               }
             }
 
-            Text {
-              id: playlistShortcutsHeading
+            Item {
+              id: playlistShortcutsHeadingRow
               visible: !root.compactWidth
               anchors.left: parent.left
               anchors.right: parent.right
               anchors.top: primaryNavigation.bottom
               anchors.leftMargin: Style.space(13)
-              anchors.rightMargin: Style.space(13)
+              anchors.rightMargin: Style.space(8)
               anchors.topMargin: Style.space(9)
-              height: visible ? implicitHeight : 0
-              text: "YOUR LIBRARY"
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
+              height: visible ? Math.max(playlistShortcutsHeading.implicitHeight, sidebarSortButton.implicitHeight) : 0
+
+              Text {
+                id: playlistShortcutsHeading
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                text: "YOUR LIBRARY"
+                color: root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Button {
+                id: sidebarSortButton
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.sidebarSortLabel()
+                foreground: root.muted
+                fontSize: Style.font.caption
+                horizontalPadding: Style.space(4)
+                focusable: false
+                tooltipText: "Sort playlists: Alphabetical (A–Z), Recents, or Spotify default"
+                onClicked: root.cycleSidebarSort()
+              }
             }
 
             Column {
               id: libraryNavigation
               anchors.left: parent.left
               anchors.right: parent.right
-              anchors.top: playlistShortcutsHeading.visible
-                ? playlistShortcutsHeading.bottom : primaryNavigation.bottom
+              anchors.top: playlistShortcutsHeadingRow.visible
+                ? playlistShortcutsHeadingRow.bottom : primaryNavigation.bottom
               anchors.leftMargin: Style.space(8)
               anchors.rightMargin: Style.space(8)
               anchors.topMargin: Style.space(6)
@@ -3451,17 +3586,31 @@ Item {
 
               Button {
                 width: parent.width
-                text: root.compactWidth ? "" : "Liked Songs"
-                iconText: root.compactWidth ? "" : "󰋑"
+                text: root.compactWidth ? ""
+                  : (root.sidebarLibraryTab === "podcasts" ? "Your Episodes" : "Liked Songs")
+                iconText: root.compactWidth ? ""
+                  : (root.sidebarLibraryTab === "podcasts" ? "󰐾" : "󰋑")
                 foreground: root.foreground
                 selected: root.currentTab === "library"
+                  && root.libraryType === (root.sidebarLibraryTab === "podcasts" ? "episodes" : "tracks")
                 leftAlign: !root.compactWidth
                 horizontalPadding: root.compactWidth
                   ? 0 : Style.spacing.controlPaddingX
                 focusable: false
                 hasCursor: root.cursorOn("sidebar", "nav-library")
-                tooltipText: "Liked Songs"
-                onClicked: root.chooseTab("library")
+                tooltipText: root.sidebarLibraryTab === "podcasts"
+                  ? "Your Episodes · Saved episodes" : "Liked Songs"
+                onClicked: {
+                  if (root.sidebarLibraryTab === "podcasts") {
+                    root.libraryType = "episodes"
+                    root.chooseTab("library")
+                    if (root.service) root.service.loadLibrary("episodes", false)
+                  } else {
+                    root.libraryType = "tracks"
+                    root.chooseTab("library")
+                    if (root.service) root.service.loadLibrary("tracks", false)
+                  }
+                }
                 onHovered: function(on) {
                   if (on) root.setPanelCursor("sidebar", "nav-library")
                 }
@@ -3469,7 +3618,7 @@ Item {
                 OpticalGlyph {
                   anchors.fill: parent
                   visible: root.compactWidth
-                  text: "󰋑"
+                  text: root.sidebarLibraryTab === "podcasts" ? "󰐾" : "󰋑"
                   color: parent.selected
                     ? Style.selectedStateColor(root.foreground, root.accent)
                     : root.foreground
@@ -3478,33 +3627,102 @@ Item {
                 }
               }
 
-              Grid {
+              Row {
                 width: parent.width
-                columns: root.compactWidth ? 1 : 2
+                visible: !root.compactWidth
                 spacing: Style.space(2)
 
                 Button {
-                  width: root.compactWidth ? parent.width
-                    : Math.max(20, parent.width - createPlaylistShortcut.width
-                      - parent.spacing)
-                  text: root.compactWidth ? "" : "Playlists"
-                  iconText: root.compactWidth ? "" : "󱁐"
+                  width: Math.floor((parent.width
+                    - (createPlaylistShortcut.visible ? (createPlaylistShortcut.width + parent.spacing * 2) : parent.spacing)) / 2)
+                  text: "Playlists"
+                  iconText: "󱁐"
                   foreground: root.foreground
-                  selected: root.currentTab === "playlists"
-                  leftAlign: !root.compactWidth
-                  horizontalPadding: root.compactWidth
-                    ? 0 : Style.spacing.controlPaddingX
+                  selected: root.sidebarLibraryTab === "playlists"
+                  fontSize: Style.font.caption
+                  horizontalPadding: Style.space(4)
                   focusable: false
                   hasCursor: root.cursorOn("sidebar", "nav-playlists")
                   tooltipText: "Playlists"
-                  onClicked: root.chooseTab("playlists")
+                  onClicked: {
+                    root.sidebarLibraryTab = "playlists"
+                    if (root.service) root.service.loadSidebarPlaylists()
+                  }
+                  onHovered: function(on) {
+                    if (on) root.setPanelCursor("sidebar", "nav-playlists")
+                  }
+                  KeyHint { region: "sidebar"; action: "nav-playlists" }
+                }
+
+                Button {
+                  width: Math.floor((parent.width
+                    - (createPlaylistShortcut.visible ? (createPlaylistShortcut.width + parent.spacing * 2) : parent.spacing)) / 2)
+                  text: "Podcasts"
+                  iconText: "󰦔"
+                  foreground: root.foreground
+                  selected: root.sidebarLibraryTab === "podcasts"
+                  fontSize: Style.font.caption
+                  horizontalPadding: Style.space(4)
+                  focusable: false
+                  hasCursor: root.cursorOn("sidebar", "nav-podcasts")
+                  tooltipText: "Podcasts"
+                  onClicked: {
+                    root.sidebarLibraryTab = "podcasts"
+                    if (root.service) {
+                      root.service.loadLibrary("shows", false)
+                      root.service.loadLibrary("episodes", false)
+                    }
+                  }
+                  onHovered: function(on) {
+                    if (on) root.setPanelCursor("sidebar", "nav-podcasts")
+                  }
+                  KeyHint { region: "sidebar"; action: "nav-podcasts" }
+                }
+
+                Button {
+                  id: createPlaylistShortcut
+                  visible: root.sidebarLibraryTab === "playlists"
+                  width: implicitWidth
+                  text: "+"
+                  foreground: root.foreground
+                  fontSize: Style.font.subtitle
+                  horizontalPadding: Style.space(7)
+                  focusable: false
+                  hasCursor: root.cursorOn("sidebar", "nav-create")
+                  tooltipText: "Create a new playlist"
+                  enabled: root.accountConnected && root.service
+                    && !root.service.playlistActionBusy
+                  onClicked: root.openCreatePlaylistPopup()
+                  onHovered: function(on) {
+                    if (on) root.setPanelCursor("sidebar", "nav-create")
+                  }
+                  KeyHint { region: "sidebar"; action: "nav-create" }
+                }
+              }
+
+              Column {
+                width: parent.width
+                visible: root.compactWidth
+                spacing: Style.space(2)
+
+                Button {
+                  width: parent.width
+                  foreground: root.foreground
+                  selected: root.sidebarLibraryTab === "playlists"
+                  horizontalPadding: 0
+                  focusable: false
+                  hasCursor: root.cursorOn("sidebar", "nav-playlists")
+                  tooltipText: "Playlists"
+                  onClicked: {
+                    root.sidebarLibraryTab = "playlists"
+                    root.chooseTab("playlists")
+                  }
                   onHovered: function(on) {
                     if (on) root.setPanelCursor("sidebar", "nav-playlists")
                   }
                   KeyHint { region: "sidebar"; action: "nav-playlists" }
                   OpticalGlyph {
                     anchors.fill: parent
-                    visible: root.compactWidth
                     text: "󱁐"
                     color: parent.selected
                       ? Style.selectedStateColor(root.foreground, root.accent)
@@ -3515,13 +3733,43 @@ Item {
                 }
 
                 Button {
-                  id: createPlaylistShortcut
-                  width: root.compactWidth
-                    ? parent.width : implicitWidth
+                  width: parent.width
+                  foreground: root.foreground
+                  selected: root.sidebarLibraryTab === "podcasts"
+                  horizontalPadding: 0
+                  focusable: false
+                  hasCursor: root.cursorOn("sidebar", "nav-podcasts")
+                  tooltipText: "Podcasts"
+                  onClicked: {
+                    root.sidebarLibraryTab = "podcasts"
+                    root.libraryType = "shows"
+                    root.chooseTab("library")
+                    if (root.service) {
+                      root.service.loadLibrary("shows", false)
+                      root.service.loadLibrary("episodes", false)
+                    }
+                  }
+                  onHovered: function(on) {
+                    if (on) root.setPanelCursor("sidebar", "nav-podcasts")
+                  }
+                  KeyHint { region: "sidebar"; action: "nav-podcasts" }
+                  OpticalGlyph {
+                    anchors.fill: parent
+                    text: "󰦔"
+                    color: parent.selected
+                      ? Style.selectedStateColor(root.foreground, root.accent)
+                      : root.foreground
+                    fontFamily: root.fontFamily
+                    fontSize: Style.font.icon
+                  }
+                }
+
+                Button {
+                  width: parent.width
                   text: "+"
                   foreground: root.foreground
                   fontSize: Style.font.subtitle
-                  horizontalPadding: Style.space(7)
+                  horizontalPadding: 0
                   focusable: false
                   hasCursor: root.cursorOn("sidebar", "nav-create")
                   tooltipText: "Create a new playlist"
@@ -3544,7 +3792,7 @@ Item {
               anchors.top: libraryNavigation.bottom
               anchors.bottom: setupNavButton.top
               anchors.margins: Style.space(8)
-              model: root.service ? root.service.sidebarPlaylists() : []
+              model: root.sidebarItems()
               clip: true
               spacing: Style.space(1)
               reuseItems: true
@@ -3555,36 +3803,71 @@ Item {
                 parent: playlistShortcuts
                 flickable: playlistShortcuts
                 onScrolled: {
-                  if (playlistShortcuts.atYEnd && root.service
-                      && root.service.playlistsNext
-                      && !root.service.playlistsLoading)
-                    root.service.loadMorePlaylists()
+                  if (playlistShortcuts.atYEnd && root.service) {
+                    if (root.sidebarLibraryTab === "playlists"
+                        && root.service.playlistsNext
+                        && !root.service.playlistsLoading)
+                      root.service.loadMorePlaylists()
+                    else if (root.sidebarLibraryTab === "podcasts"
+                        && root.service.savedShowsNext
+                        && !root.service.savedShowsLoading)
+                      root.service.loadLibrary("shows", true)
+                  }
                 }
               }
 
               onMovementEnded: {
-                if (atYEnd && root.service && root.service.playlistsNext
-                    && !root.service.playlistsLoading) root.service.loadMorePlaylists()
+                if (atYEnd && root.service) {
+                  if (root.sidebarLibraryTab === "playlists"
+                      && root.service.playlistsNext
+                      && !root.service.playlistsLoading)
+                    root.service.loadMorePlaylists()
+                  else if (root.sidebarLibraryTab === "podcasts"
+                      && root.service.savedShowsNext
+                      && !root.service.savedShowsLoading)
+                    root.service.loadLibrary("shows", true)
+                }
               }
 
               delegate: Button {
                 required property var modelData
                 required property int index
                 width: ListView.view.width
-                text: root.sidebarPlaylistName(modelData)
-                iconText: "󰲸"
-                foreground: root.foreground
+                text: modelData.isHeader
+                  ? (modelData.title + " (" + modelData.count + ")")
+                  : root.sidebarItemName(modelData)
+                iconText: modelData.isHeader
+                  ? (modelData.collapsed ? "▸" : "▾")
+                  : (modelData.type === "show" ? "󰦔" : "󰲸")
+                foreground: modelData.isHeader ? root.muted : root.foreground
+                fontSize: modelData.isHeader ? Style.font.caption : Style.font.body
                 leftAlign: true
                 focusable: false
                 hasCursor: root.cursorOn("sidebar", "sidebar-playlists")
                   && ListView.isCurrentItem
-                selected: root.currentTab === "playlists" && root.service
-                  && root.service.selectedPlaylist
-                  && root.service.selectedPlaylist.id === modelData.id
-                tooltipText: modelData.name || "Playlist"
+                selected: !modelData.isHeader && (
+                  modelData.type === "show"
+                    ? (root.currentTab === "detail" && root.service
+                      && root.service.detailItem
+                      && root.service.detailItem.id === modelData.id)
+                    : (root.currentTab === "playlists" && root.service
+                      && root.service.selectedPlaylist
+                      && root.service.selectedPlaylist.id === modelData.id)
+                )
+                tooltipText: modelData.isHeader
+                  ? (modelData.collapsed ? "Expand " + modelData.title : "Collapse " + modelData.title)
+                  : (modelData.name || (modelData.type === "show" ? "Podcast" : "Playlist"))
                 onClicked: {
-                  root.chooseTab("playlists")
-                  if (root.service) root.service.openPlaylist(modelData)
+                  if (modelData.isHeader) {
+                    root.toggleSectionCollapsed(modelData.sectionId)
+                  } else if (modelData.type === "show") {
+                    root.recordRecentPlaylist(modelData.uri)
+                    root.openItem(modelData)
+                  } else {
+                    root.recordRecentPlaylist(modelData.uri)
+                    root.chooseTab("playlists")
+                    if (root.service) root.service.openPlaylist(modelData)
+                  }
                 }
                 onHovered: function(on) {
                   if (!on) return
@@ -3605,6 +3888,29 @@ Item {
                   }
                 }
               }
+            }
+
+            Text {
+              id: sidebarEmptyNotice
+              visible: !root.compactWidth && root.sidebarItems().length === 0
+              anchors.top: libraryNavigation.bottom
+              anchors.topMargin: Style.space(24)
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.margins: Style.space(12)
+              horizontalAlignment: Text.AlignHCenter
+              text: {
+                if (root.sidebarLibraryTab === "podcasts") {
+                  return root.service && root.service.savedShowsLoading
+                    ? "Loading podcasts…" : "No followed podcasts"
+                }
+                return root.service && root.service.playlistsLoading
+                  ? "Loading playlists…" : "No playlists found"
+              }
+              color: root.muted
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
             }
 
             Button {

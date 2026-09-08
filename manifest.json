@@ -33,7 +33,7 @@
       "idleShutdownMinutes": 15,
       "showMiniPlayer": "On",
       "shortcutPlayer": "Omarchy Music app",
-      "shortcutHints": "On",
+      "shortcutHints": "Off",
       "showTrackTitle": "On",
       "showArtistName": "Off",
       "showPausedTrack": "On",
@@ -92,7 +92,7 @@
           "On",
           "Off"
         ],
-        "defaultValue": "On",
+        "defaultValue": "Off",
         "description": "After the first shortcut, matching controls show the next key to press. Shortcuts still work when this is off."
       },
       {
