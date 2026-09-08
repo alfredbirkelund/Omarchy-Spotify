@@ -1,25 +1,47 @@
 # Changelog
 
-## Unreleased
+## 1.0.4 (unreleased)
 
-- Keep the last played song loaded while nothing is playing, the way the
-  desktop app's footer does. The bar popup and player show it in place of
-  "Nothing playing", and Play continues inside the playlist or album it came
-  from, starting the local receiver first when it has idled out. Seek, skip,
-  shuffle, and repeat stay disabled until something is actually loaded.
-- Add a "Fixed bar width" bar setting. When on, the bar label always reserves
-  the configured maximum width while a track is shown, so the widget and the
-  widgets laid out after it no longer shift when the song title length
-  changes. Off by default; unavailable while the width is unlimited.
-- Keep nearby Spotify Connect speakers, including Sonos, when Avahi takes
-  longer than a few seconds to finish resolving every service. Discovery now
-  uses the records already printed, accepts IPv4 addresses even when Avahi
-  labels the browse result as IPv6, and waits up to 8 seconds.
+- Cancel obsolete search pages, reuse pending searches and cached categories,
+  and show queued, authorization, fetching, and cooldown progress.
+- Bound stalled API and token requests. Keep a private-query-free diagnostic
+  history and distinguish exhausted developer quota from temporary throttling.
+- Isolate personal OAuth identities and reject invalid client IDs visibly.
+- Preserve manual pagination beyond 200 items. Collection filters scan five
+  pages at a time with partial-result status and Continue/Cancel controls.
+- Browse artist releases by artist ID and keep compact-row Save discoverable.
+- Route global player shortcuts through one shared owner to the focused monitor.
+- Limit backend restart loops, report safe startup failures, and provide an
+  explicit local Stop action that is respected when reopening the panel.
+- Add pinned validation CI and real Quickshell authorization and app smoke tests.
+
+- Add a "Show artwork" setting (On by default). When off, album and playlist
+  covers are never downloaded and the app becomes text-only: artwork tiles are
+  removed entirely and their space is given to titles and controls across the
+  mini-player, now-playing card, lists, and detail pages. Lyrics plugins keep
+  receiving cover URLs.
+
 - Keep popups drawn inside the player (keyboard shortcuts help, menus, and
   pickers) readable on translucent themes. They reuse the theme's popup
   colour, which glass-style themes set to a low alpha meant for blurred
   standalone windows; inside the panel there is no blur behind them, so the
   alpha is now floored at 0.96 while the hue is kept.
+- Keep nearby Spotify Connect speakers, including Sonos, when Avahi takes
+  longer than a few seconds to finish resolving every service. Discovery now
+  uses the records already printed, accepts IPv4 addresses even when Avahi
+  labels the browse result as IPv6, and waits up to 8 seconds.
+- Retry failed remote artwork downloads with bounded exponential backoff, so
+  covers recover after the network reconnects instead of remaining placeholders
+  until their source changes.
+- Add a "Fixed bar width" bar setting. When on, the bar label always reserves
+  the configured maximum width while a track is shown, so the widget and the
+  widgets laid out after it no longer shift when the song title length
+  changes. Off by default; unavailable while the width is unlimited.
+- Keep the last played song loaded while nothing is playing, the way the
+  desktop app's footer does. The bar popup and player show it in place of
+  "Nothing playing", and Play continues inside the playlist or album it came
+  from, starting the local receiver first when it has idled out. Seek, skip,
+  shuffle, and repeat stay disabled until something is actually loaded.
 - Apply volume while the volume slider is dragged, in both the bar popup and the
   player, instead of waiting for the mouse release. Commands are coalesced per
   backend: 80 ms for local spotifyd, 250 ms for Spotify Connect devices so the
@@ -55,10 +77,13 @@
 - Hide the track title and artist from the bar while playback is paused, leaving
   only the Spotify icon visible.
 
+- Add an optional spinning vinyl-record style to the mini-player. The default
+  remains the original rectangular artwork.
 - Reconnect a closed librespot session inside the existing backend process, so
   transient Spotify connection closures no longer tear down the local socket
   and MPRIS player. Fall back to the supervised restart after five reconnects
   in ten minutes.
+
 - Stop on an explicit Spotify audio-key rejection instead of rapidly skipping
   through the queue and triggering rate limits, and explain in the bar and
   player that another Spotify Connect device is required.

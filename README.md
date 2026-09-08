@@ -106,8 +106,23 @@ The essentials are always one click away, without reopening the full app.
 
 ## Set it up
 
-In Omarchy Spotify's Settings, choose whether **Super+Shift+M** launches
-Omarchy's Music app, toggles the full player, or toggles the mini-player.
+To replace Omarchy's existing **Super+Shift+M · Music** binding, add this to
+`~/.config/hypr/bindings.lua`:
+
+```lua
+  hl.unbind("SUPER + SHIFT + M") -- previously: Music
+  o.bind("SUPER + SHIFT + M", "Omarchy Spotify",
+    "omarchy shell -q quickshell.spotify.player togglePlayer")
+```
+
+Run `hyprctl reload` and check `hyprctl configerrors` after saving. Until the
+binding is replaced, Omarchy's stock Music binding stays active and the
+Settings choice below has no effect on the shortcut.
+
+In Omarchy Spotify's Settings, choose whether that shortcut launches Omarchy's
+Music app, toggles the full player, or toggles the mini-player. Separate
+bindings can call `toggleMiniPlayer` or `toggleFullPlayer` on the same
+`quickshell.spotify.player` target.
 
 Raise or lower Spotify volume from a keybinding without opening the player:
 
@@ -128,6 +143,26 @@ provenance matches this plugin version's tag and the checkout's backend inputs
 still match that tagged source. If verification is unavailable, setup builds
 the locked Rust source locally or offers Omarchy's packaged `spotifyd` fallback
 instead of executing an unverified download.
+
+## Seeing "Spotify is busy." or slow searches?
+
+The plugin's Spotify Web API client ID is shared by every install worldwide,
+and Spotify rate-limits requests **per app**, not per user. When that shared
+quota runs out you see `Spotify is busy. Try again in N seconds.` and searches
+that stall even though nothing is wrong on your side.
+
+You can use a personal [Spotify Developer app](https://developer.spotify.com/dashboard)
+with a separate quota. This does not provide unlimited requests or restore restricted endpoints.
+
+1. Add `http://127.0.0.1:8989/login` as the app's redirect URI.
+2. Set **Spotify Developer app client ID** in the plugin settings. Leave it empty
+   to use the shipped app. Invalid IDs produce an error.
+3. Authorize the selected app. Changing the ID clears the current session and
+   account data; stored sessions are isolated by client ID.
+
+Development apps require an eligible Premium owner and allowlisted users, and
+have endpoint restrictions. See Spotify's [quota modes](https://developer.spotify.com/documentation/web-api/concepts/quota-modes).
+The local Connect authorization remains separate.
 
 ## Remove it completely
 
@@ -185,8 +220,9 @@ used again.
 - Build a queue, start track radio, use shuffle and repeat, or set a sleep timer.
 - Listen on this computer or switch to another Spotify Connect speaker or player.
 - Choose the mini-player or full player independently for the bar icon and
-  keyboard shortcut, show the title, artist, or both, and softly scroll
-  overflowing text at an adjustable speed.
+  keyboard shortcut, use optional spinning vinyl artwork in the mini-player,
+  show the title, artist, or both, and softly scroll overflowing text at an
+  adjustable speed.
 - Choose up to 320 kbps for local playback.
 
 Your Spotify password is entered only on Spotify's own page. Omarchy Spotify

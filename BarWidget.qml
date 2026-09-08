@@ -24,9 +24,12 @@ BarWidget {
       spotify.showPausedTrack) : ""
   readonly property bool miniPlayerEnabled:
     String(root.setting("showMiniPlayer", "On")) !== "Off"
+  readonly property bool vinylRecordEnabled:
+    String(root.setting("showVinylRecord", "Off")) === "On"
   readonly property bool iconOnly: !spotify || vertical || !spotify.hasMedia
     || barText === ""
   property bool popupOpen: false
+  property bool contextMenuVisible: false
   property bool lyricsInstallPromptVisible: false
   property bool miniShortcutHelpVisible: false
   property bool popoutSwitchClosing: false
@@ -38,7 +41,7 @@ BarWidget {
   property bool pendingShortcutLatch: false
   readonly property bool shortcutHintsEnabled: spotify
     ? spotify.shortcutHintsEnabled
-    : String(root.setting("shortcutHints", "Off")) !== "Off"
+    : String(root.setting("shortcutHints", "On")) !== "Off"
   readonly property bool shortcutHintsActive: shortcutHintsEnabled
     && shortcutModeLatched && !miniShortcutHelpVisible
     && !lyricsInstallPromptVisible
@@ -57,7 +60,10 @@ BarWidget {
     accent: Color.accent
   }
   readonly property bool opened: popupOpen
-  readonly property var miniShortcutRows: [
+  readonly property var miniShortcutRows: spotify && spotify.showLyrics
+    ? allMiniShortcutRows
+    : allMiniShortcutRows.filter(function(row) { return row.keys !== "Ctrl+Shift+L" })
+  readonly property var allMiniShortcutRows: [
     { keys: "Tab / arrows / HJKL", action: "Select a control" },
     { keys: "Enter", action: "Activate selected button" },
     { keys: "Left / Right", action: "Adjust selected slider" },
@@ -78,6 +84,7 @@ BarWidget {
     { keys: "Esc", action: "Close" }
   ]
   readonly property var miniKeyboardActions: {
+    if (contextMenuVisible) return spotify && spotify.daemon.running ? ["stop", "open"] : ["open"]
     if (lyricsInstallPromptVisible) return ["prompt-cancel", "prompt-confirm"]
     if (miniShortcutHelpVisible) return ["help-close"]
     if (spotify && !spotify.accountConnected) {
@@ -109,6 +116,7 @@ BarWidget {
   }
   function close() {
     miniShortcutHelpVisible = false
+    contextMenuVisible = false
     clearShortcutMode()
     popupOpen = false
   }
@@ -256,34 +264,6 @@ BarWidget {
     else bar.shell.toggle("quickshell.spotify", encoded)
   }
 
-  IpcHandler {
-    target: root.moduleName + ".player"
-
-    function configuredPlayer(): string {
-      return root.shortcutPlayer()
-    }
-
-    function togglePlayer(): string {
-      return root.toggleConfiguredPlayerShortcut()
-    }
-
-    function toggleMiniPlayer(): string {
-      return root.toggleMiniPlayerShortcut()
-    }
-
-    function toggleFullPlayer(): string {
-      return root.toggleFullPlayerShortcut()
-    }
-
-    function volumeUp(): string {
-      return root.adjustVolume(0.05) ? "ok" : "unavailable"
-    }
-
-    function volumeDown(): string {
-      return root.adjustVolume(-0.05) ? "ok" : "unavailable"
-    }
-  }
-
   function openCurrentArtist() {
     if (!spotify || !bar || !bar.shell
         || !spotify.currentArtistContextAvailable) return
@@ -312,7 +292,7 @@ BarWidget {
   }
 
   function openLyrics() {
-    if (!spotify || !spotify.currentLyricsSong) return
+    if (!spotify || !spotify.lyricsAvailable) return
     var result = spotify.requestLyrics(lyricsRequestKey)
     if (result !== "opening") {
       lyricsInstallPromptVisible = true
@@ -408,6 +388,10 @@ BarWidget {
     } else if (action === "repeat") {
       if (spotify) spotify.cycleRepeat()
     } else if (action === "lyrics") openLyrics()
+    else if (action === "stop") {
+      if (spotify) spotify.stopEngine()
+      close()
+    }
     else if (action === "volume") toggleMute()
     else if (action === "setup") {
       if (spotify && !spotify.loginBusy) spotify.login()
@@ -520,7 +504,10 @@ BarWidget {
   implicitHeight: button.implicitHeight
 
   onSettingsChanged: syncSettings()
-  onSpotifyChanged: syncSettings()
+  onSpotifyChanged: {
+    syncSettings()
+    if (spotify) spotify.registerPlayerSurface(root)
+  }
   onMiniPlayerEnabledChanged: if (!miniPlayerEnabled) close()
   onShortcutHintsEnabledChanged: if (!shortcutHintsEnabled) clearShortcutMode()
   onMiniKeyboardActionsChanged: ensureMiniCursor()
@@ -549,8 +536,14 @@ BarWidget {
       lyricsInstallPromptVisible = false
     }
   }
-  Component.onCompleted: syncSettings()
-  Component.onDestruction: if (spotify) spotify.setUiVisible(surfaceKey, false)
+  Component.onCompleted: {
+    syncSettings()
+    if (spotify) spotify.registerPlayerSurface(root)
+  }
+  Component.onDestruction: if (spotify) {
+    spotify.setUiVisible(surfaceKey, false)
+    spotify.unregisterPlayerSurface(root)
+  }
 
   BarIconButton {
     id: button
@@ -560,7 +553,7 @@ BarWidget {
     hasVisualContent: true
     slotSize: Style.bar.iconSlot
     opticalSize: Style.bar.iconCanvas
-    fontSize: root.iconOnly ? Style.bar.iconFont : Style.font.body
+    fontSize: root.iconOnly ? Math.round(Style.bar.iconFont * 0.9) : Style.font.body
     active: root.spotify && root.spotify.playing
     // Follow the bar's contrast-aware color when transparency changes.
     // Keep root.foreground theme-based for the popup/player surfaces.
@@ -685,9 +678,13 @@ BarWidget {
     }
 
     onPressed: function(mouseButton) {
-      if (mouseButton === Qt.MiddleButton) {
+      if (mouseButton === Qt.RightButton) {
+        root.contextMenuVisible = true
+        root.popupOpen = true
+      } else if (mouseButton === Qt.MiddleButton) {
         if (root.spotify) root.spotify.togglePlayback()
       } else {
+        root.contextMenuVisible = false
         root.toggle()
       }
     }
@@ -706,7 +703,7 @@ BarWidget {
     open: root.popupOpen
     focusTarget: miniKeyCatcher
     contentWidth: fittedContentWidth(Style.space(340))
-    contentHeight: fittedContentHeight(root.miniShortcutHelpVisible
+    contentHeight: fittedContentHeight(root.contextMenuVisible ? barContextMenu.implicitHeight : root.miniShortcutHelpVisible
       ? miniShortcutHelp.implicitHeight : contentColumn.implicitHeight)
 
     Item {
@@ -746,9 +743,31 @@ BarWidget {
       }
 
       Column {
+        id: barContextMenu
+        width: parent.width
+        visible: root.contextMenuVisible
+        spacing: Style.space(6)
+        Button {
+          text: "Stop playback on this computer"
+          iconText: "󰓛"
+          foreground: root.foreground
+          visible: root.spotify && root.spotify.daemon.running
+          enabled: root.spotify && !root.spotify.daemon.busy
+          hasCursor: root.miniCursorActive && root.miniCursor === "stop"
+          onClicked: root.activateMiniAction("stop")
+        }
+        Button {
+          text: "Open full player"
+          foreground: root.foreground
+          hasCursor: root.miniCursorActive && root.miniCursor === "open"
+          onClicked: root.openFullPanel()
+        }
+      }
+
+      Column {
         id: contentColumn
         anchors.fill: parent
-        visible: !root.miniShortcutHelpVisible
+        visible: !root.miniShortcutHelpVisible && !root.contextMenuVisible
         spacing: Style.space(10)
 
       Row {
@@ -843,50 +862,139 @@ BarWidget {
           miniNowPlayingMetadata.implicitHeight)
         height: implicitHeight
         readonly property real metadataSpacing: Style.space(12)
+        readonly property bool artworkVisible: !root.spotify
+          || root.spotify.artworkEnabled
         visible: !root.lyricsInstallPromptVisible
           && (!root.spotify || root.spotify.accountConnected)
 
-        BorderSurface {
+        Item {
           id: miniArtworkSurface
-          width: Style.space(78)
+          width: miniNowPlaying.artworkVisible ? Style.space(78) : 0
           height: width
+          visible: miniNowPlaying.artworkVisible
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
-          radius: Style.cornerRadius
-          color: Style.normalFillFor(root.foreground, Color.accent)
-          borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
 
-          Image {
-            id: popupArtwork
+          BorderSurface {
+            id: rectangleArtworkSurface
             anchors.fill: parent
-            anchors.margins: Style.space(3)
-            source: root.popupOpen && root.spotify
-              ? Api.idleMediaText(root.spotify.artUrl,
-                root.spotify.lastPlayedItem, "imageUrl", "")
-              : ""
-            sourceSize.width: 156
-            sourceSize.height: 156
-            fillMode: Image.PreserveAspectFit
-            asynchronous: true
-            cache: true
-            visible: status === Image.Ready
+            visible: !root.vinylRecordEnabled
+            radius: Style.cornerRadius
+            color: Style.normalFillFor(root.foreground, Color.accent)
+            borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+
+            RetryImage {
+              id: popupArtwork
+              anchors.fill: parent
+              anchors.margins: Style.space(3)
+              requestedSource: !root.vinylRecordEnabled && root.popupOpen && root.spotify && root.spotify.artworkEnabled
+                ? Api.idleMediaText(root.spotify.artUrl, root.spotify.lastPlayedItem, "imageUrl", "") : ""
+              sourceSize.width: 156
+              sourceSize.height: 156
+              fillMode: Image.PreserveAspectFit
+              asynchronous: true
+              cache: true
+              visible: status === Image.Ready
+            }
+
+            Text {
+              anchors.centerIn: parent
+              visible: popupArtwork.status !== Image.Ready
+              text: ""
+              color: root.foreground
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.displayLarge
+            }
           }
 
-          Text {
-            anchors.centerIn: parent
-            visible: popupArtwork.status !== Image.Ready
-            text: ""
-            color: root.foreground
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.displayLarge
-          }
+          Rectangle {
+            id: recordArtworkSurface
+            anchors.fill: parent
+            visible: root.vinylRecordEnabled
+            radius: width / 2
+            color: Style.normalFillFor(root.foreground, Color.accent)
+            border.width: 1
+            border.color: root.foreground
+            clip: true
 
+            Rectangle {
+              id: popupRecordMask
+              anchors.fill: parent
+              anchors.margins: Style.space(3)
+              radius: width / 2
+              color: "white"
+              visible: false
+              layer.enabled: true
+            }
+
+            Rectangle {
+              id: popupRecord
+              anchors.fill: parent
+              anchors.margins: Style.space(3)
+              radius: width / 2
+              color: Style.normalFillFor(root.foreground, Color.accent)
+              clip: true
+
+              RotationAnimation on rotation {
+                from: 0
+                to: 360
+                duration: 7000
+                loops: Animation.Infinite
+                running: root.vinylRecordEnabled && root.popupOpen
+                  && root.spotify && root.spotify.artworkEnabled && root.spotify.playing
+              }
+
+              RetryImage {
+                id: popupRecordArtwork
+                anchors.fill: parent
+                requestedSource: root.vinylRecordEnabled && root.popupOpen && root.spotify && root.spotify.artworkEnabled
+                  ? Api.idleMediaText(root.spotify.artUrl, root.spotify.lastPlayedItem, "imageUrl", "") : ""
+                sourceSize.width: 156
+                sourceSize.height: 156
+                fillMode: Image.PreserveAspectCrop
+                asynchronous: true
+                cache: true
+                visible: false
+              }
+
+              MultiEffect {
+                anchors.fill: parent
+                source: popupRecordArtwork
+                maskEnabled: true
+                maskSource: popupRecordMask
+                maskThresholdMin: 0.5
+                maskSpreadAtMin: 1
+                visible: popupRecordArtwork.status === Image.Ready
+              }
+
+              Rectangle {
+                anchors.centerIn: parent
+                width: Math.max(Style.space(8), parent.width * 0.16)
+                height: width
+                radius: width / 2
+                color: Color.background
+                border.width: 1
+                border.color: Qt.rgba(0, 0, 0, 0.35)
+                visible: popupRecordArtwork.status === Image.Ready
+              }
+            }
+
+            Text {
+              anchors.centerIn: parent
+              visible: popupRecordArtwork.status !== Image.Ready
+              text: ""
+              color: root.foreground
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.displayLarge
+            }
+          }
         }
 
         Column {
           id: miniNowPlayingMetadata
           anchors.left: miniArtworkSurface.right
-          anchors.leftMargin: miniNowPlaying.metadataSpacing
+          anchors.leftMargin: miniArtworkSurface.visible
+            ? miniNowPlaying.metadataSpacing : 0
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.space(4)

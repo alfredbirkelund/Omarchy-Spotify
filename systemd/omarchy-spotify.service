@@ -7,6 +7,9 @@ Conflicts=omarchy-spotifyd.service
 StartLimitIntervalSec=60s
 StartLimitBurst=5
 
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
 [Service]
 Type=simple
 Environment=PULSE_LATENCY_MSEC=30
@@ -14,6 +17,7 @@ Environment=TOKIO_WORKER_THREADS=2
 ExecStart=%h/.local/lib/omarchy-spotify/omarchy-spotify-backend --config-path=%h/.config/omarchy-spotify/spotifyd.conf
 Restart=on-failure
 RestartSec=5
+RestartPreventExitStatus=75 77 78
 TimeoutStopSec=5
 UMask=0077
 NoNewPrivileges=true

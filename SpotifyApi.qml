@@ -23,8 +23,11 @@ Item {
   property double rateLimitedUntil: 0
   property bool restrictInFlight: false
   property bool pumpingRequests: false
+  property bool cancellingAll: false
   property bool pumpAgain: false
   property var timedJobs: []
+  property var diagnostics: []
+  property int activeTimeoutMs: 15000
   property var xhrFactory: function() { return new XMLHttpRequest() }
   property var now: function() { return Date.now() }
 
@@ -63,10 +66,18 @@ Item {
   function deliverJob(job, status, payload, error, xhr) {
     var elapsed = job.queuedAt !== undefined
       ? Math.max(0, now() - job.queuedAt) : 0
-    if (error || elapsed >= 2000)
-      console.warn("Spotify API " + String(job.method || "GET") + " "
-        + Api.redact(String(job.path || "")) + " finished in " + elapsed + " ms"
-        + (error ? ": " + Api.redact(error) : ""))
+    var entry = {
+      route: String(job.path || "").split("?")[0].replace(/^https:\/\/api.spotify.com\/v1/, "")
+        .replace(/\/(users|artists|albums|tracks|playlists|shows|episodes|audiobooks)\/[^/]+/g, "/$1/:id"),
+      method: String(job.method || "GET"), status: status,
+      durationMs: elapsed,
+      queueMs: Math.max(0, (job.startedAt || now()) - job.queuedAt),
+      tokenMs: job.sentAt ? Math.max(0, job.sentAt - job.startedAt) : 0,
+      httpMs: job.sentAt ? Math.max(0, now() - job.sentAt) : 0,
+      retries: job.rateLimitRetries + (job.retried ? 1 : 0),
+      outcome: error ? (status ? "http-error" : "transport-error") : "success"
+    }
+    diagnostics = diagnostics.concat([entry]).slice(-100)
     releaseRequestSlot(job.handle)
     callbackIfCurrent(job, status, payload, error, xhr)
   }
@@ -82,10 +93,18 @@ Item {
     var jobs = timedJobs.slice()
     for (var i = 0; i < jobs.length; i++) {
       var job = jobs[i]
-      if (!job || job.finished === true || !job.deadlineAt
-          || current < job.deadlineAt) continue
+      if (!job || job.finished === true) continue
+      var deadline = job.deadlineAt || job.activeDeadlineAt
+      if (!deadline || current < deadline) continue
       var handle = job.handle
       var xhr = handle ? handle.xhr : null
+      var cooldownMs = Api.apiCooldownMs(current, rateLimitedUntil)
+      var waitingForCooldown = cooldownMs > 0 && requestQueue.indexOf(job) >= 0
+      var error = waitingForCooldown
+        ? Api.rateLimitMessage(String(Math.ceil(cooldownMs / 1000)))
+        : "Spotify took too long to respond. Try again."
+      if (String(job.method || "GET") !== "GET" && job.sentAt)
+        error = "Spotify did not confirm this action. Check playback or your collection before retrying."
       if (markJobFinished(job) !== true) continue
       if (handle) {
         handle.xhr = null
@@ -93,8 +112,7 @@ Item {
         removeQueuedHandle(handle)
       }
       abortXhr(xhr)
-      deliverJob(job, 0, null,
-        "Spotify took too long to respond. Try again.", null)
+      deliverJob(job, 0, null, error, null)
     }
   }
 
@@ -113,7 +131,14 @@ Item {
     releaseRequestSlot(handle)
   }
 
+  function quotaExceeded(payload) {
+    return !!payload && !!payload.error
+      && payload.error.reason === "QUOTA_EXCEEDED"
+  }
+
   function requestError(status, payload, xhr, fallback) {
+    if (status === 429 && quotaExceeded(payload))
+      return "This Spotify app has exhausted its developer quota. Check the app configuration or use another authorized client."
     if (status === 429)
       return Api.rateLimitMessage(Api.responseRetryAfter(xhr))
     return Api.responseError(status, payload, fallback)
@@ -133,6 +158,7 @@ Item {
   }
 
   function pumpRequests() {
+    if (cancellingAll) return
     if (pumpingRequests) {
       pumpAgain = true
       return
@@ -142,7 +168,8 @@ Item {
     while (requestsInFlight < Api.apiInFlightLimit(restrictInFlight)) {
       var wait = Api.apiCooldownMs(now(), rateLimitedUntil)
       if (wait > 0) {
-        rateLimitTimer.interval = Math.max(50, wait)
+        // Timer.interval is a signed int; recheck longer cooldowns in chunks.
+        rateLimitTimer.interval = Math.min(2147483647, Math.max(50, wait))
         rateLimitTimer.restart()
         break
       }
@@ -159,6 +186,8 @@ Item {
 
   function startJob(job) {
     var handle = job.handle
+    job.startedAt = now()
+    job.activeDeadlineAt = job.startedAt + activeTimeoutMs
     var url = Api.safeApiUrl(job.path)
     if (!url) {
       finishJob(job, 0, null, "Something went wrong while contacting Spotify", null)
@@ -175,6 +204,8 @@ Item {
         finishJob(job, 0, null, tokenError || "Not logged in", null)
         return
       }
+      job.sentAt = now()
+      job.activeDeadlineAt = job.sentAt + activeTimeoutMs
       var xhr = null
       try {
         xhr = xhrFactory()
@@ -186,17 +217,19 @@ Item {
           var payload = Api.parseJson(xhr.responseText, null)
           if (xhr.status === 401 && job.retried !== true) {
             auth.invalidateAccessToken()
+            job.activeDeadlineAt = 0
             job.retried = true
             requestQueue = Api.enqueueApiJob(requestQueue, job)
             releaseRequestSlot(handle)
             return
           }
-          if (xhr.status === 429) {
+          if (xhr.status === 429 && !quotaExceeded(payload)) {
             restrictInFlight = true
             rateLimitedUntil = Api.nextRateLimitedUntil(now(),
               Api.responseRetryAfter(xhr), rateLimitedUntil, job.rateLimitRetries)
             if (job.retryRateLimit !== false
                 && Api.shouldRetryRateLimit(job.rateLimitRetries)) {
+              job.activeDeadlineAt = 0
               job.rateLimitRetries += 1
               requestQueue = Api.enqueueApiJob(requestQueue, job)
               releaseRequestSlot(handle)
@@ -256,8 +289,16 @@ Item {
       handle: handle
     }
     handle.job = job
-    if (timeoutMs > 0) timedJobs = timedJobs.concat([job])
+    timedJobs = timedJobs.concat([job])
     return enqueueJob(job)
+  }
+
+  function cancelAll() {
+    cancellingAll = true
+    var jobs = timedJobs.slice()
+    for (var i = 0; i < jobs.length; i++) abortRequest(jobs[i].handle)
+    cancelSearch()
+    cancellingAll = false
   }
 
   function cancelSearch() {
@@ -268,17 +309,18 @@ Item {
 
   // Search still uses its own serial so a newer query can reject a stale
   // callback created while a token refresh is still in flight.
-  function search(query, callback) {
+  function search(query, type, callback) {
     cancelSearch()
     var serial = searchSerial
     var term = String(query || "").trim()
+    var searchType = Api.normalizedSearchType(type)
     if (!term) {
       if (typeof callback === "function") callback(Api.searchGroups({}, 128), "")
       return
     }
     searchRequest = request("GET", "/search", {
       q: term,
-      type: Api.SEARCH_TYPES.join(","),
+      type: searchType,
       limit: 10
     }, null, function(status, payload, error) {
       if (serial !== root.searchSerial) return
@@ -294,6 +336,7 @@ Item {
 
   Timer {
     id: rateLimitTimer
+    objectName: "rateLimitTimer"
     repeat: false
     onTriggered: root.pumpRequests()
   }

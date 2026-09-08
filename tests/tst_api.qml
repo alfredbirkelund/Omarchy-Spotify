@@ -202,9 +202,21 @@ TestCase {
     verify(!Api.pendingSliderVolumeShouldHold(0.5, pending, 9000))
     compare(Api.displayedSliderVolume(0.5, pending, 9000), 0.5)
     verify(!Api.pendingSliderVolumeShouldHold(0.5, null, 2000))
-    compare(Api.SEARCH_DEBOUNCE_MS, 600)
+    compare(Api.SEARCH_DEBOUNCE_MS, 300)
     compare(Api.SEARCH_REQUEST_TIMEOUT_MS, 8000)
     compare(Api.VOLUME_FLUSH_MS, 80)
+  }
+
+  function test_searchTypeLoading_normalizesAndCachesEachCategory() {
+    compare(Api.normalizedSearchType("album"), "album")
+    compare(Api.normalizedSearchType("episode"), "episode")
+    compare(Api.normalizedSearchType("unknown"), "track")
+    compare(Api.normalizedSearchType(""), "track")
+    verify(Api.searchNeedsLoad("miles", "", false))
+    verify(Api.searchNeedsLoad(" miles ", "coltrane", true))
+    verify(Api.searchNeedsLoad("miles", "miles", false))
+    verify(!Api.searchNeedsLoad("miles", "miles", true))
+    verify(!Api.searchNeedsLoad("   ", "", false))
   }
 
   function test_shallowCopyAndAssign_copyWithoutSharingIdentity() {
@@ -224,7 +236,7 @@ TestCase {
     compare(Api.rateLimitRetryMs("0"), 1400)
     compare(Api.rateLimitRetryMs("1"), 1400)
     compare(Api.rateLimitRetryMs("1", 2), 4400)
-    compare(Api.rateLimitRetryMs("120"), 30000)
+    compare(Api.rateLimitRetryMs("120"), 120400)
     compare(Api.rateLimitRetryMs(""), 10000)
     compare(Api.rateLimitRetryMs("Wed, 21 Oct 2015 07:28:00 GMT"), 10000)
     compare(Api.apiCooldownMs(1000, 1500), 500)
@@ -238,6 +250,32 @@ TestCase {
       }
     }), "10")
     verify(Api.localSocketFallbackMessage().indexOf("local player") >= 0)
+  }
+
+  function test_rateLimitRetryMs_data() {
+    return [
+      { tag: "below-cap", header: "29", attempt: 0, expected: 29400 },
+      { tag: "at-cap", header: "30", attempt: 0, expected: 30400 },
+      { tag: "above-cap", header: "31", attempt: 0, expected: 31400 },
+      { tag: "two-minutes", header: "120", attempt: 0, expected: 120400 },
+      { tag: "one-hour", header: "3600", attempt: 0, expected: 3600400 },
+      { tag: "backoff-capped", header: "1", attempt: 10, expected: 30400 },
+      { tag: "header-exceeds-backoff", header: "120", attempt: 10, expected: 120400 },
+      { tag: "zero", header: "0", attempt: 0, expected: 1400 },
+      { tag: "missing", header: "", attempt: 0, expected: 10000 },
+      { tag: "invalid", header: "invalid", attempt: 0, expected: 10000 },
+      { tag: "negative", header: "-1", attempt: 0, expected: 10000 },
+      { tag: "nonfinite", header: "Infinity", attempt: 0, expected: 10000 }
+    ]
+  }
+
+  function test_rateLimitRetryMs(data) {
+    compare(Api.rateLimitRetryMs(data.header, data.attempt), data.expected)
+  }
+
+  function test_longRateLimitDoesNotShortenExistingDeadline() {
+    compare(Api.nextRateLimitedUntil(1000, "120", 200000), 200000)
+    compare(Api.nextRateLimitedUntil(1000, "120", 4000), 121400)
   }
 
   function test_apiRequestQueue_ordersMutationsAndSkipsAborted() {
@@ -1225,7 +1263,7 @@ TestCase {
     var active = { id: "phone", active: true }
     var fallback = { id: "omarchy", active: false }
 
-    compare(Api.playbackTargetDeviceId(active, false), "")
+    compare(Api.playbackTargetDeviceId(active, false), "phone")
     compare(Api.playbackTargetDeviceId(active, true), "phone")
     compare(Api.playbackTargetDeviceId(fallback, false), "omarchy")
     compare(Api.playbackTargetDeviceId(null, false), "")
@@ -1241,7 +1279,7 @@ TestCase {
 
     compare(Api.preferredPlaybackDevice([speaker, local], "", false).id,
       "speaker")
-    compare(Api.playbackTargetDeviceId(speaker, false), "")
+    compare(Api.playbackTargetDeviceId(speaker, false), "speaker")
   }
 
   function test_unavailableExplicitDeviceFallsBackToLocal() {

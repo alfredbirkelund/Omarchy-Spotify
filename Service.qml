@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Io
 import Quickshell.Services.Mpris
 
@@ -31,15 +32,16 @@ Item {
   }
   readonly property string stateDir: stateHome + "/omarchy-spotify"
   readonly property string sessionPath: stateDir + "/session.json"
-  readonly property string clientIdPath: homeDirectory + "/.config/omarchy-spotify/client_id"
-  property string customClientId: ""
 
   readonly property var defaultSettingValues: ({
     deviceName: "Omarchy Spotify",
     idleShutdownMinutes: 15,
     showMiniPlayer: "On",
+    showVinylRecord: "Off",
     shortcutPlayer: "Omarchy Music app",
-    shortcutHints: "Off",
+    shortcutHints: "On",
+    showLyrics: "On",
+    showArtwork: "On",
     showTrackTitle: "On",
     showArtistName: "Off",
     showPausedTrack: "On",
@@ -47,7 +49,8 @@ Item {
     scrollSpeed: "1",
     maxBarTextWidth: "240",
     fixedBarWidth: "Off",
-    audioQuality: "320 kbps"
+    audioQuality: "320 kbps",
+    clientId: ""
   })
   property var settings: Api.shallowCopy(defaultSettingValues)
 
@@ -55,9 +58,12 @@ Item {
   readonly property int idleShutdownMinutes: Math.max(0, Math.min(1440,
     Math.floor(Number(settings.idleShutdownMinutes) || 0)))
   readonly property bool showMiniPlayer: String(settings.showMiniPlayer || "On") !== "Off"
+  readonly property bool showVinylRecord: String(settings.showVinylRecord || "Off") === "On"
   readonly property string shortcutPlayer: Api.normalizedShortcutPlayer(
     settings.shortcutPlayer)
-  readonly property bool shortcutHintsEnabled: String(settings.shortcutHints || "Off") !== "Off"
+  readonly property bool shortcutHintsEnabled: String(settings.shortcutHints || "On") !== "Off"
+  readonly property bool showLyrics: String(settings.showLyrics || "On") !== "Off"
+  readonly property bool artworkEnabled: String(settings.showArtwork || "On") !== "Off"
   readonly property bool showTrackTitle: String(settings.showTrackTitle || "On") !== "Off"
   readonly property bool showArtistName: String(settings.showArtistName || "Off") === "On"
   readonly property bool showPausedTrack: String(settings.showPausedTrack || "On") !== "Off"
@@ -131,7 +137,7 @@ Item {
     && currentTrackId !== ""
   readonly property var currentLyricsSong: Api.lyricsSong(currentTrackId,
     title, artist, album, lengthSeconds, artUrl, positionSeconds)
-  readonly property bool lyricsAvailable: currentLyricsSong !== null
+  readonly property bool lyricsAvailable: showLyrics && currentLyricsSong !== null
   readonly property string lyricsPluginId: "stappmus.lyrics"
   readonly property string lyricsPluginUrl: "https://github.com/stappmus/Omasing.git"
   readonly property string lyricsPluginAvailability: {
@@ -287,7 +293,6 @@ Item {
   property string savedEpisodesNext: ""
   property var savedAudiobooks: []
   property string savedAudiobooksNext: ""
-  property var playlistCache: ({})
   property var playlistItems: []
   property string playlistItemsNext: ""
   property string playlistItemsError: ""
@@ -310,8 +315,14 @@ Item {
   property bool selectedDeviceExplicit: false
   property string localDeviceId: ""
   property string localRuntimeDeviceName: "Omarchy Spotify"
-  property string searchQuery: ""
-  property var searchGroups: Api.searchGroups({}, 128)
+  property alias searchQuery: searchController.searchQuery
+  property alias searchGroups: searchController.searchGroups
+  property alias searchError: searchController.searchError
+  property alias searchResultQuery: searchController.searchResultQuery
+  property alias searchActiveType: searchController.searchActiveType
+  property alias searchPendingType: searchController.searchPendingType
+  property alias searchLoadedTypes: searchController.searchLoadedTypes
+  property alias searchGeneration: searchController.searchGeneration
   property var savedUris: ({})
   property var savedUriCheckedAt: ({})
   property var savedUriOrder: []
@@ -407,7 +418,9 @@ Item {
   property bool playlistItemsLoading: false
   property bool queueLoading: false
   property bool devicesLoading: false
-  property bool searchLoading: false
+  property alias searchLoading: searchController.searchLoading
+  readonly property double searchCooldownUntil: spotifyApi.rateLimitedUntil
+  function searchProgressText(timestamp) { return searchController.progressText(timestamp) }
   property string lastError: ""
   property string statusMessage: ""
 
@@ -420,9 +433,9 @@ Item {
   readonly property bool detailRestorePending: !!detailItem
     && detailItem.type === "playlist" && Api.playlistRestorePending(
       detailItems.length, detailRestoreTargetCount, detailLoading, detailNext)
-  readonly property int detailRememberedItemCount: Math.min(cacheLimit,
+  readonly property int detailRememberedItemCount:
     Api.normalizedPlaylistRestoreCount(Math.max(detailItems.length,
-      detailRestoreTargetCount)))
+      detailRestoreTargetCount))
 
   property int dataSerial: 0
   property var visibleSurfaces: ({})
@@ -482,9 +495,9 @@ Item {
     var next = defaults()
     var source = values || {}
     var keys = ["deviceName", "idleShutdownMinutes", "showMiniPlayer",
-      "shortcutPlayer", "shortcutHints", "showTrackTitle", "showArtistName",
+      "showVinylRecord", "shortcutPlayer", "shortcutHints", "showLyrics", "showArtwork", "showTrackTitle", "showArtistName",
       "showPausedTrack", "scrollBarText", "scrollSpeed", "maxBarTextWidth",
-      "fixedBarWidth", "audioQuality"]
+      "fixedBarWidth", "audioQuality", "clientId"]
     for (var i = 0; i < keys.length; i++) {
       var key = keys[i]
       if (source[key] !== undefined) next[key] = source[key]
@@ -493,8 +506,11 @@ Item {
     next.idleShutdownMinutes = Math.max(0, Math.min(1440,
       Math.floor(Number(next.idleShutdownMinutes) || 0)))
     next.showMiniPlayer = String(next.showMiniPlayer || "On") === "Off" ? "Off" : "On"
+    next.showVinylRecord = String(next.showVinylRecord || "Off") === "On" ? "On" : "Off"
     next.shortcutPlayer = Api.normalizedShortcutPlayer(next.shortcutPlayer)
     next.shortcutHints = Api.normalizedShortcutHints(next.shortcutHints)
+    next.showLyrics = String(next.showLyrics || "On") === "Off" ? "Off" : "On"
+    next.showArtwork = String(next.showArtwork || "On") === "Off" ? "Off" : "On"
     next.showTrackTitle = String(next.showTrackTitle || "On") === "Off" ? "Off" : "On"
     next.showArtistName = String(next.showArtistName || "Off") === "On" ? "On" : "Off"
     next.showPausedTrack = String(next.showPausedTrack || "On") === "Off" ? "Off" : "On"
@@ -510,6 +526,10 @@ Item {
     var quality = String(next.audioQuality || "320 kbps")
     next.audioQuality = quality.indexOf("96") === 0 ? "96 kbps"
       : (quality.indexOf("160") === 0 ? "160 kbps" : "320 kbps")
+    // A personal Spotify client ID opts out of the shared rate-limit bucket.
+    // Anything that is not a 32-hex ID (including empty) means "keep shipped".
+    var customClientId = String(next.clientId || "").trim()
+    next.clientId = customClientId.toLowerCase()
     return next
   }
 
@@ -888,7 +908,10 @@ Item {
     visibleLocalDeviceRefreshAttempts = 0
   }
 
+  property bool localPlaybackStopped: false
+
   function ensureVisibleLocalReceiver() {
+    if (localPlaybackStopped || daemonManager.terminalFailure) return
     var action = Api.visibleLocalReceiverAction(uiVisible,
       fullyConnected && daemonManager.credentialsAvailable,
       daemonManager.running, daemonManager.busy)
@@ -902,6 +925,7 @@ Item {
   }
 
   function refreshVisibleLocalDevice() {
+    if (localPlaybackStopped || daemonManager.terminalFailure) return
     var action = Api.visibleLocalReceiverAction(uiVisible,
       fullyConnected && daemonManager.credentialsAvailable,
       daemonManager.running, daemonManager.busy)
@@ -1173,18 +1197,6 @@ Item {
         loadDevices()
       }
     }
-    if (state && state.playing && state.item && state.item.durationMs > 0) {
-      var remainingMs = state.item.durationMs - (Number(state.progressSeconds || 0) * 1000)
-      if (remainingMs > 500 && remainingMs <= 600000) {
-        trackEndTimer.stop()
-        trackEndTimer.interval = Math.max(800, Math.round(remainingMs) + 600)
-        trackEndTimer.start()
-      } else {
-        trackEndTimer.stop()
-      }
-    } else {
-      trackEndTimer.stop()
-    }
   }
 
   function loadPlaybackState(callback, reportError) {
@@ -1240,7 +1252,7 @@ Item {
     else if (activeView === "discover" && (force || !discoverLoaded))
       loadDiscover()
     else if (activeView === "search" && force && searchQuery)
-      search(searchQuery)
+      search(searchQuery, searchActiveType, true)
     else if (activeView === "library" && (force || !savedTracksLoaded))
       loadSavedTracks(false)
     else if (activeView === "playlists" && (force || !playlistsLoaded))
@@ -1456,8 +1468,8 @@ Item {
     root[spec.loading] = true
     spotifyApi.request("GET", path, append ? null : spec.query, null,
       function(status, payload, error) {
-        root[spec.loading] = false
         if (expected !== root.dataSerial) return
+        root[spec.loading] = false
         if (error) root.fail(error)
         else {
           var mapper = root.libraryMapper(spec.mapper)
@@ -1466,9 +1478,9 @@ Item {
             : Api.normalizePage(payload, mapper)
           var items = (append
             ? Api.mergeUnique(root[spec.items], page.items) : page.items)
-            .slice(0, root.cacheLimit)
+
           root[spec.items] = items
-          root[spec.next] = items.length >= root.cacheLimit ? "" : page.next
+          root[spec.next] = page.next
           root[spec.loaded] = true
           if (spec.checkSaved === true) root.checkSavedItems(page.items)
           else root.markItemsSaved(page.items, true)
@@ -1708,13 +1720,6 @@ Item {
     loadLibraryCollection(value, append === true)
   }
 
-  function cachePlaylist(id, items, next) {
-    if (!id) return
-    var copy = Api.shallowCopy(playlistCache || {})
-    copy[String(id)] = { items: items, next: next || "" }
-    playlistCache = copy
-  }
-
   function openPlaylist(playlist, restoredItemCount) {
     if (!playlist || !playlist.id) return
     succeed("")
@@ -1723,14 +1728,8 @@ Item {
     playlistRestoreTargetCount = Api.normalizedPlaylistRestoreCount(
       restoredItemCount)
     selectedPlaylist = playlist
-    var cached = playlistCache[String(playlist.id)]
-    if (cached && Array.isArray(cached.items) && cached.items.length > 0) {
-      playlistItems = cached.items
-      playlistItemsNext = cached.next || ""
-    } else {
-      playlistItems = []
-      playlistItemsNext = ""
-    }
+    playlistItems = []
+    playlistItemsNext = ""
     playlistItemsError = ""
     playlistItemsStatus = 0
     loadPlaylistItems(false)
@@ -1785,7 +1784,6 @@ Item {
           append, page.next)
         root.playlistItems = playlistPage.items
         root.playlistItemsNext = playlistPage.next
-        root.cachePlaylist(playlistId, playlistPage.items, playlistPage.next)
         if (Api.playlistRestoreShouldContinue(root.playlistItems.length,
             root.playlistRestoreTargetCount, root.playlistItemsNext))
           root.loadPlaylistItems(true)
@@ -2093,8 +2091,8 @@ Item {
     var type = String(item.type || "")
     if (["artist", "album", "playlist", "show", "audiobook"].indexOf(type) < 0) return
     var serial = ++detailSerial
-    detailRestoreTargetCount = type === "playlist" ? Math.min(cacheLimit,
-      Api.normalizedPlaylistRestoreCount(restoredItemCount)) : 0
+    detailRestoreTargetCount = type === "playlist"
+      ? Api.normalizedPlaylistRestoreCount(restoredItemCount) : 0
     detailItem = item
     detailItems = []
     detailNext = ""
@@ -2136,7 +2134,7 @@ Item {
         return
       }
       var page = root.detailPageFromPayload(payload, type, parent)
-      root.detailItems = page.items.slice(0, root.cacheLimit)
+      root.detailItems = page.items
       root.detailNext = page.next
       root.detailLoading = false
       root.checkSavedItems(root.detailItems)
@@ -2194,13 +2192,16 @@ Item {
   function requestArtistCatalog(type, append, expectedDetail, expectedCatalog, artist) {
     var albums = type === "album"
     var playlists = type === "playlist"
+    var discography = albums && !artistCatalogQuery && artist.id
     var path = append ? (albums ? artistAlbumsNext
-      : (playlists ? artistPlaylistsNext : artistSongsNext)) : "/search"
+      : (playlists ? artistPlaylistsNext : artistSongsNext))
+      : (discography ? "/artists/" + encodeURIComponent(artist.id) + "/albums" : "/search")
     if (!path) return
     if (albums) artistAlbumsLoading = true
     else if (playlists) artistPlaylistsLoading = true
     else artistSongsLoading = true
-    var query = append ? null : {
+    var query = append ? null : discography
+      ? { include_groups: "album,single,compilation", limit: 50 } : {
       q: playlists
         ? Api.artistPlaylistSearchText(artist.name, artistCatalogQuery)
         : Api.catalogSearchText(artist.name, artistCatalogQuery),
@@ -2216,7 +2217,9 @@ Item {
       root.detailLoading = root.artistCatalogLoading
       if (error) { root.fail(error); return }
       root.applyArtistCatalogPage(type, append,
-        Api.normalizeSearchPage(payload, type, 96))
+        discography ? Api.normalizePage(payload, function(item) {
+          return Api.normalizeContext(item, 96)
+        }) : Api.normalizeSearchPage(payload, type, 96))
     })
   }
 
@@ -2224,8 +2227,8 @@ Item {
     var existing = type === "album" ? artistAlbums
       : (type === "playlist" ? artistPlaylists : artistSongs)
     var items = (append ? Api.mergeUnique(existing, page.items) : page.items)
-      .slice(0, cacheLimit)
-    var next = items.length >= cacheLimit ? "" : page.next
+
+    var next = page.next
     if (type === "album") {
       artistAlbums = items
       artistAlbumsNext = next
@@ -2310,8 +2313,8 @@ Item {
       var page = root.detailPageFromPayload(payload, type, parent)
       root.detailItems = (type === "playlist"
         ? root.detailItems.concat(page.items)
-        : Api.mergeUnique(root.detailItems, page.items)).slice(0, root.cacheLimit)
-      root.detailNext = root.detailItems.length >= root.cacheLimit ? "" : page.next
+        : Api.mergeUnique(root.detailItems, page.items))
+      root.detailNext = page.next
       root.checkSavedItems(page.items)
       if (type === "playlist" && Api.playlistRestoreShouldContinue(
           root.detailItems.length, root.detailRestoreTargetCount,
@@ -2322,7 +2325,7 @@ Item {
 
   function ensureDetailItemCount(value) {
     if (!detailItem || detailItem.type !== "playlist") return
-    var target = Math.min(cacheLimit, Api.normalizedPlaylistRestoreCount(value))
+    var target = Api.normalizedPlaylistRestoreCount(value)
     if (target <= detailItems.length) return
     detailRestoreTargetCount = Math.max(detailRestoreTargetCount, target)
     if (detailLoading) return
@@ -2719,8 +2722,8 @@ Item {
     queueLoading = true
     spotifyApi.request("GET", "/me/player/queue", null, null,
       function(status, payload, error) {
-        root.queueLoading = false
         if (expected !== root.dataSerial) return
+        root.queueLoading = false
         if (error) root.fail(error)
         else {
           var source = payload && Array.isArray(payload.queue) ? payload.queue : []
@@ -2736,74 +2739,60 @@ Item {
       })
   }
 
-  function search(term) {
-    var normalized = String(term || "").trim()
-    searchQuery = normalized
-    searchLoading = normalized !== ""
-    if (!normalized) {
-      clearSearch()
-      return
+  SearchController {
+    id: searchController
+    api: spotifyApi
+    dataSerial: root.dataSerial
+    onRememberSearch: term => root.rememberSearch(term)
+    onCheckSavedItems: items => root.checkSavedItems(items)
+  }
+
+  property var playerSurfaces: []
+  function registerPlayerSurface(surface) {
+    if (playerSurfaces.indexOf(surface) < 0)
+      playerSurfaces = playerSurfaces.concat([surface])
+  }
+  function unregisterPlayerSurface(surface) {
+    playerSurfaces = playerSurfaces.filter(function(item) { return item && item !== surface })
+  }
+  function shortcutSurface() {
+    var focused = Hyprland.focusedMonitor
+    for (var i = 0; i < playerSurfaces.length; i++) {
+      var surface = playerSurfaces[i]
+      var window = surface ? surface.QsWindow.window : null
+      if (window && window.screen && focused && window.screen.name === focused.name)
+        return surface
     }
-    var expected = dataSerial
-    spotifyApi.search(normalized, function(groups, error) {
-      if (expected !== root.dataSerial) return
-      if (root.searchQuery !== normalized) return
-      root.searchLoading = false
-      if (error) root.fail(error)
-      else {
-        root.searchGroups = groups
-        root.rememberSearch(normalized)
-        var allItems = []
-        for (var i = 0; i < Api.SEARCH_TYPES.length; i++)
-          allItems = allItems.concat(root.searchItems(Api.SEARCH_TYPES[i]))
-        root.checkSavedItems(allItems)
-      }
-    })
+    return playerSurfaces.length ? playerSurfaces[0] : null
+  }
+  function invokePlayerShortcut(method) {
+    var surface = shortcutSurface()
+    return surface && typeof surface[method] === "function"
+      ? surface[method]() : "unavailable"
+  }
+  IpcHandler {
+    target: "quickshell.spotify.player"
+    function configuredPlayer(): string { return root.shortcutPlayer }
+    function togglePlayer(): string { return root.invokePlayerShortcut("toggleConfiguredPlayerShortcut") }
+    function toggleMiniPlayer(): string { return root.invokePlayerShortcut("toggleMiniPlayerShortcut") }
+    function toggleFullPlayer(): string { return root.invokePlayerShortcut("toggleFullPlayerShortcut") }
+    function volumeUp(): string {
+      var surface = root.shortcutSurface()
+      return surface && surface.adjustVolume(0.05) ? "ok" : "unavailable"
+    }
+    function volumeDown(): string {
+      var surface = root.shortcutSurface()
+      return surface && surface.adjustVolume(-0.05) ? "ok" : "unavailable"
+    }
   }
 
-  function searchItems(type) {
-    var page = searchGroups[String(type || "track")]
-    return page && Array.isArray(page.items) ? page.items : []
-  }
-
-  function searchNext(type) {
-    var page = searchGroups[String(type || "track")]
-    return page ? String(page.next || "") : ""
-  }
-
-  function loadMoreSearch(type) {
-    var value = String(type || "track")
-    var path = searchNext(value)
-    if (!path || searchLoading) return
-    var expected = dataSerial
-    searchLoading = true
-    spotifyApi.request("GET", path, null, null, function(status, payload, error) {
-      if (expected !== root.dataSerial) return
-      root.searchLoading = false
-      if (error) { root.fail(error); return }
-      var incoming = ({})
-      incoming[value] = Api.normalizeSearchPage(payload, value, 128)
-      var merged = Api.mergeSearchGroups(root.searchGroups, incoming)
-      if (merged[value].items.length >= root.cacheLimit) {
-        merged[value].items = merged[value].items.slice(0, root.cacheLimit)
-        merged[value].next = ""
-      }
-      root.searchGroups = merged
-      root.checkSavedItems(root.searchItems(value))
-    })
-  }
-
-  function clearSearch() {
-    searchLoading = false
-    searchQuery = ""
-    searchGroups = Api.searchGroups({}, 128)
-  }
-
-  function cancelSearch(clearResults) {
-    spotifyApi.cancelSearch()
-    searchLoading = false
-    if (clearResults === true) clearSearch()
-  }
+  function search(term, type, force) { return searchController.search(term, type, force) }
+  function searchItems(type) { return searchController.searchItems(type) }
+  function searchNext(type) { return searchController.searchNext(type) }
+  function loadMoreSearch(type) { return searchController.loadMoreSearch(type) }
+  function retrySearch(type) { return searchController.retrySearch(type) }
+  function clearSearch() { return searchController.clearSearch() }
+  function cancelSearch(clearResults) { return searchController.cancelSearch(clearResults) }
 
   function cancelArtistCatalog() {
     artistCatalogSerial++
@@ -3035,6 +3024,7 @@ Item {
   }
 
   function playItem(item, sourceItems, contextUri, successMessage, explicitRadio) {
+    localPlaybackStopped = false
     var playbackSerial = ++radioSerial
     var body = Api.playbackBody(item, sourceItems, contextUri)
     if (!body) {
@@ -3115,20 +3105,44 @@ Item {
     var successMessage = pendingPlaybackMessage
     var radioPlaylist = pendingPlaybackRadio
     var playbackSerial = pendingPlaybackSerial
+    var account = dataSerial
+    var selection = selectedDeviceId
+    var explicit = selectedDeviceExplicit
+    var target = deviceForId(deviceId)
     if (!body) return
     clearPendingPlayback(true)
-    apiAction("PUT", "/me/player/play", { device_id: deviceId }, body, successMessage,
-      function(ok) {
-        if (ok) {
-          if (playbackSerial === root.radioSerial)
-            root.radioContextSelected = !!radioPlaylist
+    function current() {
+      return account === root.dataSerial && playbackSerial === root.radioSerial
+        && selection === root.selectedDeviceId && explicit === root.selectedDeviceExplicit
+        && !root.localPlaybackStopped
+    }
+    function dispatch(retried) {
+      if (!current()) return
+      spotifyApi.request("PUT", "/me/player/play", { device_id: deviceId }, body,
+        function(status, payload, error) {
+          if (!current()) return
+          if (error && !retried && status === 404 && payload && payload.error
+              && payload.error.reason === "NO_ACTIVE_DEVICE" && target
+              && target.local && !target.restricted && deviceId) {
+            // Wake only the already chosen local receiver, once. Remote and
+            // restricted devices retain their own failure and selection.
+            spotifyApi.request("PUT", "/me/player", null,
+              { device_ids: [deviceId], play: false }, function(code, result, failure) {
+                if (!current()) return
+                if (failure) root.fail(failure)
+                else dispatch(true)
+              }, { priority: "interactive", retryRateLimit: false })
+            return
+          }
+          if (error) { root.fail(error); return }
+          root.succeed(successMessage)
+          root.radioContextSelected = !!radioPlaylist
           root.selectedDeviceId = String(deviceId || root.selectedDeviceId)
           root.loadDevices()
           root.loadQueue()
-          root.loadPlaybackState()
-          remotePlaybackRetryTimer.restart()
-        }
-      })
+        }, { priority: "interactive", retryRateLimit: false })
+    }
+    dispatch(false)
   }
 
   function startRadio(item) {
@@ -3271,14 +3285,16 @@ Item {
   function loadResumeCandidate(force) {
     if (resumeCandidateLoading) return
     if (!authManager.loggedIn && !authManager.tokenIsFresh()) return
-    if (force !== true && resumeCandidate
+    if (force !== true && resumeCandidateLoadedAt > 0
         && Date.now() - resumeCandidateLoadedAt < 30000) return
     var expected = dataSerial
     resumeCandidateLoading = true
+    resumeCandidateLoadedAt = Date.now()
     spotifyApi.request("GET", "/me/player/recently-played", { limit: 5 }, null,
       function(status, payload, error) {
+        if (expected !== root.dataSerial) return
         root.resumeCandidateLoading = false
-        if (expected !== root.dataSerial || error) return
+        if (error) return
         root.resumeCandidate = Api.resumeCandidateFromRecentlyPlayed(payload, 192)
         root.resumeCandidateLoadedAt = Date.now()
       })
@@ -3336,12 +3352,7 @@ Item {
 
   function remotePlayerAction(method, path, query) {
     apiAction(method, path, query, null, "",
-      function(ok) {
-        if (ok) {
-          root.loadPlaybackState()
-          remotePlaybackRetryTimer.restart()
-        }
-      })
+      function(ok) { if (ok) root.loadPlaybackState() })
   }
 
   function seekSeconds(seconds) {
@@ -3506,14 +3517,17 @@ Item {
   }
 
   function startEngine() {
+    localPlaybackStopped = false
     noteActivity()
     localActivationRequested = true
     deviceProbeAttempts = 0
-    daemonManager.start()
+    daemonManager.start(true)
     deviceProbeTimer.restart()
   }
 
   function stopEngine() {
+    localPlaybackStopped = true
+    cancelVisibleLocalDeviceRefresh()
     clearPendingPlayback()
     deviceProbeTimer.stop()
     localSocketWaitTimer.stop()
@@ -3617,7 +3631,6 @@ Item {
     savedAudiobooks = []
     savedAudiobooksLoaded = false
     savedAudiobooksNext = ""
-    playlistCache = ({})
     playlistItems = []
     playlistItemsNext = ""
     playlistItemsError = ""
@@ -3656,8 +3669,7 @@ Item {
     connectActivationAttempts = 0
     pendingConnectWakeTried = false
     connectActivationTimer.stop()
-    searchQuery = ""
-    searchGroups = Api.searchGroups({}, 128)
+    searchController.clearSearch()
     savedUris = ({})
     savedUriCheckedAt = ({})
     savedUriOrder = []
@@ -3770,7 +3782,10 @@ Item {
       }
       if (root.localActivationRequested) deviceProbeTimer.restart()
     }
-    function onLoggedOut() { root.clearData() }
+    function onLoggedOut() {
+      spotifyApi.cancelAll()
+      root.clearData()
+    }
     function onSessionUnavailable(reason) {
       root.loginFlowActive = false
       if (reason) root.lastError = root.safeError(reason)
@@ -3929,18 +3944,6 @@ Item {
     }
   }
 
-  FileView {
-    id: clientIdFile
-    path: root.clientIdPath
-    watchChanges: true
-    printErrors: false
-    onLoaded: {
-      var id = String(text() || "").trim()
-      root.customClientId = id
-    }
-    onLoadFailed: root.customClientId = ""
-  }
-
   Process {
     id: ensureStateDir
     running: false
@@ -4031,20 +4034,6 @@ Item {
     running: Api.remotePlaybackPollShouldRun(root.auth.loggedIn,
       root.remotePlaybackLoading, root.uiVisible, root.useRemotePlayback,
       root.playing)
-    onTriggered: root.loadPlaybackState()
-  }
-
-  Timer {
-    id: remotePlaybackRetryTimer
-    interval: 600
-    repeat: false
-    onTriggered: root.loadPlaybackState()
-  }
-
-  Timer {
-    id: trackEndTimer
-    interval: 1000
-    repeat: false
     onTriggered: root.loadPlaybackState()
   }
 
@@ -4150,7 +4139,7 @@ Item {
   AuthManager {
     id: authManager
     pluginDir: root.pluginDir
-    clientId: root.customClientId ? root.customClientId : "d420a117a32841c2b3474932e49fb54b"
+    customClientId: settings.clientId
   }
 
   AuthManager {

@@ -36,8 +36,8 @@ git -C "$release_source" config user.name "Omarchy Spotify tests"
 git -C "$release_source" config user.email "tests@example.invalid"
 git -C "$release_source" add .
 git -C "$release_source" commit -qm "Release source"
-git -C "$release_source" tag -a v1.0.3 -m "Release v1.0.3"
-release_commit=$(git -C "$release_source" rev-parse 'refs/tags/v1.0.3^{commit}')
+git -C "$release_source" tag -a v1.0.4 -m "Release v1.0.4"
+release_commit=$(git -C "$release_source" rev-parse 'refs/tags/v1.0.4^{commit}')
 printf '%s\n' 'UI-only change after the release' >"$release_source/Panel.qml"
 git -C "$release_source" add Panel.qml
 git -C "$release_source" commit -qm "Change only the UI"
@@ -480,11 +480,20 @@ grep -q 'omarchy-spotify-backend' "$source_root/scripts/spotifyd-auth.sh"
 grep -q -- '--config-path "$config_root/omarchy-spotify/spotifyd.conf"' \
   "$source_root/scripts/spotifyd-auth.sh"
 grep -q -- '--oauth-port 8000' "$source_root/scripts/spotifyd-auth.sh"
+# OAuth identity stays immutable by default: the shipped client ID is the
+# fallback, and only a user-supplied, strictly 32-hex client ID can override
+# it — never an arbitrary string from a writable surface. The keyring and OAuth
+# redirect stay scoped to that resolved ID. The streaming-only Connect ID stays
+# internal (not in the manifest).
 grep -q 'property string clientId: "d420a117a32841c2b3474932e49fb54b"' \
   "$source_root/AuthManager.qml"
 grep -q 'readonly property string redirectUri: "http://127.0.0.1:"' \
   "$source_root/AuthManager.qml"
-! grep -q '"clientId"' "$source_root/manifest.json"
+grep -q 'resolvedClientId' "$source_root/AuthManager.qml"
+grep -q 'customClientId' "$source_root/AuthManager.qml"
+grep -qF '[0-9a-f]{32}' "$source_root/AuthManager.qml"
+grep -q '"clientId"' "$source_root/manifest.json"
+grep -q 'customClientId: settings.clientId' "$source_root/Service.qml"
 ! grep -q '"oauthPort"' "$source_root/manifest.json"
 grep -q 'window.close()' "$source_root/OAuth.js"
 grep -q 'gh attestation verify' "$source_root/scripts/build-backend.sh"
@@ -499,14 +508,18 @@ if grep -E '^[[:space:]]*uses:' \
   echo "release-backend.yml contains a mutable action reference" >&2
   exit 1
 fi
-jq -e '.version == "1.0.3"
+jq -e '.version == "1.0.4"
   and .barWidget.defaultSection == "left"
   and .barWidget.defaults.showMiniPlayer == "On"
   and (.barWidget.schema[] | select(.key == "showMiniPlayer").defaultValue) == "On"
   and .barWidget.defaults.showPausedTrack == "On"
   and (.barWidget.schema[] | select(.key == "showPausedTrack").defaultValue) == "On"
+  and .barWidget.defaults.showVinylRecord == "Off"
+  and (.barWidget.schema[] | select(.key == "showVinylRecord").defaultValue) == "Off"
   and .barWidget.defaults.shortcutHints == "Off"
   and (.barWidget.schema[] | select(.key == "shortcutHints").defaultValue) == "Off"
+  and .barWidget.defaults.showLyrics == "On"
+  and (.barWidget.schema[] | select(.key == "showLyrics").defaultValue) == "On"
   and .barWidget.defaults.maxBarTextWidth == "240"
   and (.barWidget.schema[] | select(.key == "maxBarTextWidth").defaultValue) == "240"
   and .barWidget.defaults.audioQuality == "320 kbps"

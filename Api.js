@@ -264,8 +264,8 @@ function rateLimitRetryMs(retryAfter, attempt) {
   var retry = Math.max(0, Math.floor(Number(attempt) || 0))
   var backoffMs = 1000 * Math.pow(2, retry)
   // Spotify often 429s again if we retry at exactly Retry-After, especially
-  // when the header is 1 second. Wait a little longer and grow the delay.
-  return Math.min(30000, Math.max(1000, headerMs, backoffMs) + 400)
+  // when the header is 1 second. Cap our backoff, never the server delay.
+  return Math.max(1000, headerMs, Math.min(30000, backoffMs)) + 400
 }
 
 function shouldRetryRateLimit(retriesSoFar) {
@@ -635,8 +635,20 @@ function spotifyTypeLabel(type) {
 
 var MUTE_THRESHOLD = 0.001
 var UNMUTE_FLOOR = 0.05
-var SEARCH_DEBOUNCE_MS = 600
+var SEARCH_DEBOUNCE_MS = 300
 var SEARCH_REQUEST_TIMEOUT_MS = 8000
+
+function normalizedSearchType(value) {
+  var type = String(value || "")
+  return SEARCH_TYPES.indexOf(type) >= 0 ? type : "track"
+}
+
+function searchNeedsLoad(query, activeQuery, typeLoaded) {
+  var term = String(query || "").trim()
+  return term !== "" && (String(activeQuery || "").trim() !== term
+    || typeLoaded !== true)
+}
+
 var VOLUME_FLUSH_MS = 80
 var VOLUME_FLUSH_REMOTE_MS = 250
 var VOLUME_FLUSH_SONOS_MS = 120
@@ -813,13 +825,12 @@ function automaticLocalPlaybackDevice(selectedId, preferredDevice, localDevice) 
       && candidate.restricted !== true ? candidate : null
 }
 
-// Omitting device_id tells Spotify to keep the user's active device. Address a
-// device directly only for an explicit choice or an inactive fallback target.
+// Freeze the chosen receiver for this playback intent. A missing ID remains
+// valid for hardware players exposed only through current playback.
 function playbackTargetDeviceId(device, explicitSelection) {
   var item = device || null
   if (!item) return ""
-  return explicitSelection === true || item.active !== true
-    ? String(item.id || "") : ""
+  return String(item.id || "")
 }
 
 function isLocalPlaybackDevice(device, configuredName, runtimeName, knownId) {

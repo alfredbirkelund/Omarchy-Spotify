@@ -454,10 +454,23 @@ class ConnectHelperTests(unittest.TestCase):
             helper.subprocess,
             "run",
             side_effect=subprocess.TimeoutExpired(
-                cmd=["avahi-browse"], timeout=8, output=dump
+                cmd=["avahi-browse"], timeout=8, output=dump.encode("utf-8")
             ),
         ):
             self.assertEqual(helper.browse_spotify_connect(), dump)
+
+
+    def test_real_timeout_keeps_partial_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "avahi-browse"
+            executable.write_text(
+                "#!/usr/bin/env python3\nimport time\n"
+                "print('resolved receiver', flush=True)\ntime.sleep(2)\n"
+            )
+            executable.chmod(0o755)
+            with mock.patch.dict(os.environ, {"PATH": directory + os.pathsep + os.environ["PATH"]}), \
+                 mock.patch.object(helper, "AVAHI_BROWSE_TIMEOUT_SECONDS", 0.15):
+                self.assertEqual(helper.browse_spotify_connect(), "resolved receiver\n")
 
     def test_browse_spotify_connect_fails_when_timeout_has_no_stdout(self) -> None:
         with mock.patch.object(
